@@ -1,0 +1,10 @@
+## Interface: 120000
+## Title: CleanCombatLog
+## Notes: Compact three-column combat log and Forever API test shell.
+## Author: CleanCombatLog
+## Version: 0.1.0-test
+## SavedVariables: CleanCombatLogDB
+
+Core.lua
+Display.lua
+CombatLog.lua
