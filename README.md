@@ -1,75 +1,64 @@
-# CleanCombatLog 0.1.0-test
+# CleanCombatLog 0.2.0-experimental
 
 A standalone test shell for a compact three-column World of Warcraft combat log.
 
 This package is intentionally independent. It contains no dependencies on any UI suite or addon framework.
 
-## Purpose of this build
+> This branch is experimental. `main` remains the CLEU-first test build. The player-centric adapter on this branch is a fallback candidate only and should not be merged until CLEU has been definitively ruled out for World of Warcraft: Forever.
 
-This is the Thursday beta/API test build. It provides:
+## Current experiment
 
-- Three synchronized scrolling columns:
-  - left: incoming
-  - centre: information/recovery
-  - right: outgoing
-- Right/centre/left text alignment matching the intended visual grammar.
-- Row synchronization by inserting blank rows into the two inactive columns.
-- Hover tooltips for compact entries.
-- Combat start/end markers.
-- A dummy-data display test.
-- A compatibility adapter that detects either:
-  - `C_CombatLog.GetCurrentEventInfo()`, or
-  - legacy `CombatLogGetCurrentEventInfo()`.
-- An explicit `/ccl cleu` test so we can see whether Forever permits
-  `COMBAT_LOG_EVENT_UNFILTERED`.
-- A minimal live parser for damage, healing, misses, auras and deaths if CLEU works.
+This branch keeps the existing CLEU path unchanged and adds an opt-in player-centric adapter built around `UNIT_COMBAT` plus player/pet spell-cast tracking.
+
+The fallback is intentionally narrower than a full combat log:
+
+- incoming damage to the player
+- incoming healing to the player
+- incoming miss/block/dodge/parry style results
+- outgoing damage against the current target when recent player/pet activity makes attribution plausible
+- outgoing healing against the current target under the same attribution model
+- pet attribution marker when recent pet activity is the best match
+- damage-school colour where the school mask is accessible
+- critical marker from the `UNIT_COMBAT` flag text
+
+It does **not** claim perfect outgoing attribution in groups. Damage to the current target can also have been caused by another player, and DoTs on targets that are no longer the current target need a more sophisticated tracking strategy.
+
+## Secret Values
+
+Midnight-style combat values may be secret while combat restrictions are active. The normal scrolling-message-frame path performs string conversion and therefore is not suitable for secret combat amounts.
+
+This branch adds `SecretDisplay.lua`, which passes combat amounts directly to `FontString:SetText()` and keeps prefixes, suffixes and colours separate. The value itself is not inspected, formatted, compared or converted by addon code.
 
 ## Installation
 
-1. Place the repository folder in the beta client's `Interface/AddOns` directory as `CleanCombatLog`.
+1. Check out `feature/player-centric-combat-adapter` and place the repository folder in the client `Interface/AddOns` directory as `CleanCombatLog`.
 2. If the client marks the addon as out of date, enable **Load out of date AddOns**.
-   The `## Interface` value in this test build is provisional because Forever's interface
-   number is not public yet.
 3. Log into a character.
-4. Type:
-
-   `/ccl test`
-
-   You should see representative entries across all three columns.
-
-5. Type:
-
-   `/ccl api`
-
-   Copy the output if you want to compare the client/build/API details.
-
-6. Type:
-
-   `/ccl cleu`
-
-   This explicitly attempts to register `COMBAT_LOG_EVENT_UNFILTERED`.
-
-7. If registration succeeds, attack a target and watch for live rows.
+4. `/ccl test` verifies the original display shell.
+5. `/ccl api` prints API diagnostics.
+6. `/ccl cleu` attempts to register `COMBAT_LOG_EVENT_UNFILTERED`.
+7. `/ccl unitcombat` toggles the experimental player-centric fallback.
 
 ## Commands
 
 - `/ccl test` — populate representative dummy rows.
 - `/ccl api` — print client/API diagnostics.
 - `/ccl cleu` — toggle/attempt CLEU registration.
-- `/ccl clear` — clear the display.
+- `/ccl unitcombat` — toggle the experimental `UNIT_COMBAT` adapter.
+- `/ccl clear` — clear both legacy and secret-safe display rows.
 - `/ccl move` — unlock and drag the display.
 - `/ccl lock` — lock it and hide the move background.
 
-## What to report from Thursday's test
+## Decision gate
 
-The most useful outputs are:
+The preferred implementation remains the full structured combat-log path if Forever exposes it.
 
-1. The full `/ccl api` chat output.
-2. What happens immediately after `/ccl cleu`.
-3. Whether attacking a target creates entries.
-4. Any Lua error text.
-5. The interface number reported by `/ccl api`.
+Do not merge this branch solely because Midnight restrictions are expected to apply. We should first obtain direct evidence that Forever rejects or does not fire `COMBAT_LOG_EVENT_UNFILTERED` for third-party addons. If CLEU is definitively unavailable, this branch becomes the basis for the restricted player-centric implementation.
 
-This test build is deliberately not the finished addon. Periodic-event aggregation,
-full combat summaries, exact historical formatting, icon handling, configuration UI,
-and any Forever-specific fallback adapter will be added after the API result is known.
+If that happens, the next work should focus on:
+
+1. improving outgoing attribution in groups;
+2. tracking engaged targets for DoTs and delayed effects;
+3. adding spell icons using player/pet cast history;
+4. recreating the original periodic-event aggregation behaviour without inspecting secret numeric values;
+5. validating which `UNIT_COMBAT` fields become secret in Forever specifically.
