@@ -2,9 +2,11 @@
 ## Title: CleanCombatLog
 ## Notes: Compact three-column combat log and Forever API test shell.
 ## Author: CleanCombatLog
-## Version: 0.1.0-test
+## Version: 0.2.0-experimental
 ## SavedVariables: CleanCombatLogDB
 
 Core.lua
 Display.lua
+SecretDisplay.lua
 CombatLog.lua
+PlayerCombat.lua
