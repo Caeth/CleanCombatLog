@@ -175,7 +175,8 @@ local function Meter(quiet)
         local ok, session = pcall(C_DamageMeter.GetCombatSessionFromType, current, metric)
         local args = {METER_TYPES[metric] or tostring(metric)}
         if not ok then
-            args[#args+1], args[#args+1] = "<error>", Safe(session)
+            args[#args+1] = "<error>"
+            args[#args+1] = Safe(session)
         elseif not CanAccess(session) then
             args[#args+1] = "<secret-session>"
         elseif type(session) ~= "table" then
