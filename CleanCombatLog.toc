@@ -1,10 +1,11 @@
-## Interface: 120000
+## Interface: 16001
 ## Title: CleanCombatLog
-## Notes: Compact three-column combat log and Forever API test shell.
+## Notes: Compact combat log and WoW Forever combat API instrumentation probe.
 ## Author: CleanCombatLog
-## Version: 0.1.0-test
+## Version: 0.2.0-probe
 ## SavedVariables: CleanCombatLogDB
 
 Core.lua
 Display.lua
 CombatLog.lua
+Probe.lua
