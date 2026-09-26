@@ -5,11 +5,14 @@ CCL.Probe = frame
 
 local active, startedAt, combatTextUnit = false, 0, nil
 local records, counts, registration = {}, {}, {}
+local formatterRestoreSettings, formatterRestoreFilteredEvents, formatterProfile
+local formatterPreview, formatterPreviewRows, formatterPreviewIndex
 local MAX_RECORDS = 2500
 
 local EVENTS = {
     "PLAYER_SWING", "PLAYER_SWING_RANGE_UPDATE",
-    "COMBAT_LOG_MESSAGE", "COMBAT_TEXT_UPDATE",
+    "COMBAT_LOG_MESSAGE", "COMBAT_LOG_APPLY_FILTER_SETTINGS", "COMBAT_LOG_REFILTER_ENTRIES",
+    "COMBAT_TEXT_UPDATE",
     "UNIT_COMBAT", "UNIT_AURA",
     "UNIT_SPELLCAST_SENT", "UNIT_SPELLCAST_START", "UNIT_SPELLCAST_STOP",
     "UNIT_SPELLCAST_DELAYED", "UNIT_SPELLCAST_SUCCEEDED",
@@ -269,6 +272,248 @@ local function RestoreCombatText()
     combatTextUnit = nil
 end
 
+local function DeepCopy(value, seen)
+    if type(value) ~= "table" then return value end
+    seen = seen or {}
+    if seen[value] then return seen[value] end
+    local copy = {}
+    seen[value] = copy
+    for k, v in pairs(value) do
+        copy[DeepCopy(k, seen)] = DeepCopy(v, seen)
+    end
+    return copy
+end
+
+local function EnsureBlizzardCombatLogLoaded()
+    if Blizzard_CombatLog_Filters then return true end
+    if C_AddOns and C_AddOns.LoadAddOn then
+        pcall(C_AddOns.LoadAddOn, "Blizzard_CombatLog")
+    elseif LoadAddOn then
+        pcall(LoadAddOn, "Blizzard_CombatLog")
+    end
+    return Blizzard_CombatLog_Filters ~= nil
+end
+
+local function GetFormatterProfile(profileName)
+    if not EnsureBlizzardCombatLogLoaded() then
+        return nil, "Blizzard_CombatLog_Filters unavailable"
+    end
+
+    local container = Blizzard_CombatLog_Filters
+    if type(container) ~= "table" or type(container.filters) ~= "table" then
+        return nil, "built-in combat-log filter table unavailable"
+    end
+
+    local index
+    profileName = (profileName or "current"):lower()
+    if profileName == "current" then
+        index = tonumber(container.currentFilter) or 1
+    elseif profileName == "myactions" or profileName == "mine" then
+        index = 1
+    elseif profileName == "me" or profileName == "incoming" then
+        index = 2
+    else
+        return nil, "profile must be current, myactions, or me"
+    end
+
+    local profile = container.filters[index]
+    if type(profile) ~= "table" or type(profile.filters) ~= "table" or type(profile.settings) ~= "table" then
+        return nil, "selected built-in filter profile is incomplete"
+    end
+
+    return DeepCopy(profile), nil, index
+end
+
+local function CreateFormatterPreview()
+    if formatterPreview then return formatterPreview end
+
+    local preview = CreateFrame("Frame", nil, UIParent)
+    preview:SetSize(900, 150)
+    preview:SetPoint("TOP", UIParent, "TOP", 0, -140)
+    preview:SetFrameStrata("DIALOG")
+
+    local bg = preview:CreateTexture(nil, "BACKGROUND")
+    bg:SetAllPoints()
+    bg:SetColorTexture(0, 0, 0, 0.72)
+
+    local title = preview:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    title:SetPoint("TOPLEFT", 8, -6)
+    title:SetText("CleanCombatLog secure formatter preview — protected messages are displayed unchanged")
+
+    formatterPreviewRows = {}
+    for i = 1, 8 do
+        local row = preview:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        row:SetPoint("TOPLEFT", 8, -8 - (i * 16))
+        row:SetPoint("RIGHT", preview, "RIGHT", -8, 0)
+        row:SetJustifyH("LEFT")
+        row:SetText("")
+        formatterPreviewRows[i] = row
+    end
+
+    formatterPreviewIndex = 0
+    formatterPreview = preview
+    return preview
+end
+
+local function ClearFormatterPreview()
+    if not formatterPreviewRows then return end
+    for _, row in ipairs(formatterPreviewRows) do row:SetText("") end
+    formatterPreviewIndex = 0
+end
+
+local function ShowFormatterMessage(message, r, g, b)
+    if not formatterPreview or not formatterPreview:IsShown() then return end
+    if not formatterPreviewRows then return end
+
+    formatterPreviewIndex = (formatterPreviewIndex % #formatterPreviewRows) + 1
+    local row = formatterPreviewRows[formatterPreviewIndex]
+    row:SetText(message)
+
+    if CanAccess(r) and CanAccess(g) and CanAccess(b)
+        and type(r) == "number" and type(g) == "number" and type(b) == "number" then
+        row:SetTextColor(r, g, b)
+    else
+        row:SetTextColor(1, 1, 1)
+    end
+end
+
+local function SaveFormatterRestoreState()
+    if formatterRestoreSettings then return true end
+    local profile, err = GetFormatterProfile("current")
+    if not profile then return false, err end
+
+    formatterRestoreSettings = profile
+    if C_CombatLog and C_CombatLog.AreFilteredEventsEnabled then
+        local ok, enabled = pcall(C_CombatLog.AreFilteredEventsEnabled)
+        if ok then formatterRestoreFilteredEvents = enabled end
+    end
+    return true
+end
+
+local function FormatterStatus()
+    local hasApply = C_CombatLog and type(C_CombatLog.ApplyFilterSettings) == "function"
+    local loaded = EnsureBlizzardCombatLogLoaded()
+    local current = loaded and Blizzard_CombatLog_Filters and Blizzard_CombatLog_Filters.currentFilter or nil
+
+    CCL.Print("formatter ApplyFilterSettings:", tostring(hasApply))
+    CCL.Print("formatter Blizzard filters:", tostring(loaded), "currentFilter:", tostring(current or "?"))
+    CCL.Print("formatter active probe profile:", formatterProfile or "none")
+    CCL.Print("formatter restore snapshot:", formatterRestoreSettings and "saved" or "not saved")
+    if C_CombatLog and C_CombatLog.AreFilteredEventsEnabled then
+        CCL.Print("formatter filtered events enabled:", SafeCall(C_CombatLog.AreFilteredEventsEnabled))
+    end
+end
+
+local function ApplyFormatter(profileName, mode)
+    if not C_CombatLog or type(C_CombatLog.ApplyFilterSettings) ~= "function" then
+        CCL.Print("probe: C_CombatLog.ApplyFilterSettings unavailable.")
+        Add("api", "C_CombatLog.ApplyFilterSettings", {"unavailable"})
+        return
+    end
+
+    local saved, saveErr = SaveFormatterRestoreState()
+    if not saved then
+        CCL.Print("probe: cannot snapshot current combat-log settings:", saveErr)
+        Add("api", "C_CombatLog.ApplyFilterSettings", {"snapshot-failed", saveErr})
+        return
+    end
+
+    local profile, err, index = GetFormatterProfile(profileName)
+    if not profile then
+        CCL.Print("probe: formatter profile unavailable:", err)
+        return
+    end
+
+    mode = (mode or "compact"):lower()
+    if mode ~= "compact" and mode ~= "full" then
+        CCL.Print("probe: formatter mode must be compact or full.")
+        return
+    end
+
+    profile.settings.fullText = (mode == "full")
+    profile.settings.timestamp = false
+    profile.settings.amountColoring = true
+    profile.settings.amountSchoolColoring = true
+
+    local ok, result = pcall(C_CombatLog.ApplyFilterSettings, profile)
+    Add("api", "C_CombatLog.ApplyFilterSettings",
+        {profileName or "current", mode, "index=" .. tostring(index or "?"), ok and "ok" or "<error>", ok and "nil" or Safe(result)})
+
+    if not ok then
+        CCL.Print("probe: ApplyFilterSettings failed:", Safe(result))
+        return
+    end
+
+    formatterProfile = (profileName or "current") .. "/" .. mode
+    local preview = CreateFormatterPreview()
+    ClearFormatterPreview()
+    preview:Show()
+
+    if C_CombatLog.RefilterEntries then
+        pcall(C_CombatLog.RefilterEntries)
+    end
+
+    CCL.Print("probe: secure combat-log formatter applied:", formatterProfile .. ".")
+    CCL.Print("Protected COMBAT_LOG_MESSAGE lines will appear in the preview unchanged.")
+end
+
+local function RestoreFormatter()
+    if not formatterRestoreSettings then
+        CCL.Print("probe: no formatter restore snapshot is available.")
+        return
+    end
+    if not C_CombatLog or type(C_CombatLog.ApplyFilterSettings) ~= "function" then
+        CCL.Print("probe: C_CombatLog.ApplyFilterSettings unavailable; cannot restore.")
+        return
+    end
+
+    local ok, result = pcall(C_CombatLog.ApplyFilterSettings, formatterRestoreSettings)
+    Add("api", "C_CombatLog.ApplyFilterSettings", {"restore", ok and "ok" or "<error>", ok and "nil" or Safe(result)})
+
+    if ok and formatterRestoreFilteredEvents ~= nil and C_CombatLog.SetFilteredEventsEnabled then
+        pcall(C_CombatLog.SetFilteredEventsEnabled, formatterRestoreFilteredEvents)
+    end
+    if ok and C_CombatLog.RefilterEntries then pcall(C_CombatLog.RefilterEntries) end
+
+    if ok then
+        formatterProfile = nil
+        formatterRestoreSettings = nil
+        formatterRestoreFilteredEvents = nil
+        if formatterPreview then formatterPreview:Hide() end
+        CCL.Print("probe: original built-in combat-log formatter settings restored.")
+    else
+        CCL.Print("probe: formatter restore failed:", Safe(result))
+    end
+end
+
+local function FormatterCommand(text)
+    local action, profile = (text or ""):match("^%s*(%S*)%s*(.-)%s*$")
+    action = (action or "status"):lower()
+    profile = profile ~= "" and profile:lower() or "current"
+
+    if action == "" or action == "status" then
+        FormatterStatus()
+    elseif action == "compact" or action == "full" then
+        ApplyFormatter(profile, action)
+    elseif action == "refilter" then
+        if C_CombatLog and C_CombatLog.RefilterEntries then
+            local ok, err = pcall(C_CombatLog.RefilterEntries)
+            Add("api", "C_CombatLog.RefilterEntries", {ok and "ok" or "<error>", ok and "nil" or Safe(err)})
+            CCL.Print(ok and "probe: combat-log refilter requested." or ("probe: refilter failed: " .. Safe(err)))
+        else
+            CCL.Print("probe: C_CombatLog.RefilterEntries unavailable.")
+        end
+    elseif action == "restore" then
+        RestoreFormatter()
+    elseif action == "preview" then
+        local preview = CreateFormatterPreview()
+        if profile == "off" then preview:Hide() else preview:Show() end
+        CCL.Print("probe: formatter preview", preview:IsShown() and "shown." or "hidden.")
+    else
+        CCL.Print("formatter: status | compact [current|myactions|me] | full [current|myactions|me] | refilter | restore | preview [on|off]")
+    end
+end
+
 local function PrintRecord(r)
     local args = r.args and table.concat(r.args, " | ") or ""
     local target = r.context and r.context.targetGUID
@@ -288,7 +533,7 @@ end
 function CCL:StopCombatProbe()
     if not active then self.Print("probe is not running."); return end
     Add("probe", "STOP")
-    Persist(); UnregisterAll(); RestoreCombatText(); active = false
+    Persist(); UnregisterAll(); RestoreCombatText(); RestoreFormatter(); active = false
     self.Print("probe stopped;", #records, "sanitised records saved in CleanCombatLogDB.probe.")
 end
 
@@ -330,15 +575,18 @@ function CCL:HandleProbeCommand(rest)
     elseif cmd == "meter" then Meter(false)
     elseif cmd == "death" then DeathRecap(false)
     elseif cmd == "combattext" then SetCombatTextUnit(arg ~= "" and arg or "player")
+    elseif cmd == "formatter" then FormatterCommand(arg)
     elseif cmd == "clear" then records, counts, registration = {}, {}, {}; if CleanCombatLogDB then CleanCombatLogDB.probe = nil end; self.Print("probe data cleared.")
-    else self.Print("probe commands: start, stop, status, summary, dump [n], events, meter, death, combattext <unit>, clear") end
+    else self.Print("probe commands: start, stop, status, summary, dump [n], events, meter, death, combattext <unit>, formatter <action>, clear") end
 end
 
 frame:SetScript("OnEvent", function(_, event, ...)
     if not active then return end
     Capture(event, ...)
 
-    if event == "COMBAT_TEXT_UPDATE" then
+    if event == "COMBAT_LOG_MESSAGE" then
+        ShowFormatterMessage(...)
+    elseif event == "COMBAT_TEXT_UPDATE" then
         CombatText(Safe(select(1, ...)))
     elseif (event == "PLAYER_TARGET_CHANGED" and combatTextUnit == "target")
         or (event == "PLAYER_FOCUS_CHANGED" and combatTextUnit == "focus") then
