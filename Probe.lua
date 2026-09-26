@@ -533,7 +533,7 @@ end
 function CCL:StopCombatProbe()
     if not active then self.Print("probe is not running."); return end
     Add("probe", "STOP")
-    Persist(); UnregisterAll(); RestoreCombatText(); RestoreFormatter(); active = false
+    Persist(); UnregisterAll(); RestoreCombatText(); if formatterRestoreSettings then RestoreFormatter() end; active = false
     self.Print("probe stopped;", #records, "sanitised records saved in CleanCombatLogDB.probe.")
 end
 
