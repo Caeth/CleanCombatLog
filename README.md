@@ -14,6 +14,7 @@ The probe attempts runtime registration rather than assuming that every Mainline
 - the player/unit spell-cast lifecycle (`UNIT_SPELLCAST_*`)
 - `COMBAT_TEXT_UPDATE` plus `C_CombatText.GetCurrentEventInfo()`
 - `COMBAT_LOG_MESSAGE` without attempting to parse its protected message payload
+- the secure Blizzard combat-log formatter via `C_CombatLog.ApplyFilterSettings()` and `C_CombatLog.RefilterEntries()`
 - player combat-state events
 - target/focus/pet/nameplate context changes
 - threat updates
@@ -27,7 +28,28 @@ It also probes:
 - `C_CombatLog.IsCombatLogRestricted()` when present
 - secret-value predicates (`canaccessvalue`, `issecretvalue`)
 
-Potentially secret values are never converted, compared or parsed by the logger. Inaccessible values are stored as `<secret>` markers. The `COMBAT_LOG_MESSAGE` text itself is deliberately represented only as `<protected-combat-message>`.
+Potentially secret values are never converted, compared or parsed by the logger. Inaccessible values are stored as `<secret>` markers. The capture still represents `COMBAT_LOG_MESSAGE` text only as `<protected-combat-message>`, but the formatter experiment can pass the protected message directly into a `FontString` preview unchanged so we can visually compare Blizzard-generated output without parsing it.
+
+## Secure formatter experiment
+
+The release-day probe now tests a separate avenue: whether addons can configure Blizzard's secure combat-log processor closely enough that **Blizzard performs the filtering and formatting before the result becomes a protected KString**.
+
+The probe uses the existing built-in combat-log profiles as its source settings, snapshots the currently selected profile before changing anything, and can apply either compact or full-text formatting. It can also apply Blizzard's built-in **My Actions** or **Me** profiles so we can test whether source/destination filtering remains usable from addon code.
+
+Commands:
+
+- `/ccl probe formatter status` — report whether `ApplyFilterSettings` and the built-in filter tables are available.
+- `/ccl probe formatter compact current` — apply the currently selected combat-log profile with compact text, no timestamp and amount/school colouring.
+- `/ccl probe formatter compact myactions` — ask Blizzard to generate compact protected messages for its built-in **My Actions** filter.
+- `/ccl probe formatter compact me` — same for Blizzard's built-in **Me** filter.
+- `/ccl probe formatter full current|myactions|me` — equivalent tests with `fullText=true`.
+- `/ccl probe formatter refilter` — ask Blizzard to regenerate retained combat-log entries using the current secure filter/format settings.
+- `/ccl probe formatter preview on|off` — show/hide the protected-message preview.
+- `/ccl probe formatter restore` — reapply the snapshot captured before the first formatter experiment.
+
+`/ccl probe stop` also restores the original formatter settings automatically if a formatter experiment is still active.
+
+This experiment deliberately does **not** attempt to modify or parse the returned protected message. Its purpose is to determine whether the secure formatter itself can get close enough to CleanCombatLog's desired output that the protected message can be used as an accuracy-first display path.
 
 ## Installation
 
@@ -71,6 +93,7 @@ For outgoing-target experiments, `/ccl probe combattext target` asks `C_CombatTe
 - `/ccl probe meter` — take an explicit `C_DamageMeter` snapshot.
 - `/ccl probe death` — explicitly inspect the latest death recap.
 - `/ccl probe combattext player|target|pet|focus` — choose the active `C_CombatText` unit for focused testing.
+- `/ccl probe formatter ...` — run the secure Blizzard combat-log formatter experiment described above.
 - `/ccl probe clear` — clear in-memory and saved probe data.
 
 The normal `/ccl cleu` command remains available for direct CLEU testing; this branch does not merge the player-centric fallback implementation.
@@ -85,6 +108,7 @@ The most useful minimum output is:
 4. `/ccl probe dump 100` after one controlled combat scenario
 5. `/ccl probe meter` after combat
 6. `/ccl probe death` after a player death
+7. `/ccl probe formatter status`, followed by `compact myactions` and `compact me` during separate short combat tests, then `restore`
 
 For a longer session, the sanitised capture is also persisted at `CleanCombatLogDB.probe` on stop and after post-combat snapshots.
 
