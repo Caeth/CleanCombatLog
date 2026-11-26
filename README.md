@@ -1,6 +1,6 @@
 # CleanCombatLog 0.2.0-probe
 
-This branch is an isolated **World of Warcraft: Forever combat API instrumentation build**. It is intentionally separate from both `main` and the experimental `feature/player-centric-combat-adapter` fallback branch.
+This build provides **World of Warcraft: Forever combat API instrumentation** and an opt-in experimental combat display.
 
 The goal is to recover as much of the old `COMBAT_LOG_EVENT_UNFILTERED` capability as Forever actually permits, and only accept missing functionality after direct shipping-client testing shows that it cannot be reconstructed reliably.
 
@@ -53,7 +53,7 @@ This experiment deliberately does **not** attempt to modify or parse the returne
 
 ## Installation
 
-1. Check out `experiment/forever-combat-probe`.
+1. Check out `main`.
 2. Place the repository folder in the shipping Forever client's `Interface/AddOns` directory as `CleanCombatLog`.
 3. Log in and run `/ccl api` and `/ccl cleu`. The project report recognizes `WOW_PROJECT_CAMELOT` and ID 18. Registration and payload-reader checks run independently of project identity.
 4. Run `/ccl probe start`, `/ccl probe events`, and `/ccl probe formatter status` before testing combat.
@@ -117,7 +117,7 @@ For outgoing-target experiments, `/ccl probe combattext target` asks `C_CombatTe
 - `/ccl probe formatter ...` — run the secure Blizzard combat-log formatter experiment described above.
 - `/ccl probe clear` — clear in-memory and saved probe data.
 
-The normal `/ccl cleu` command remains available for direct CLEU testing; this branch does not merge the player-centric fallback implementation.
+Use `/ccl cleu` for direct CLEU testing. Use `/ccl unitcombat` to toggle the experimental fallback for a separate display test. The fallback starts disabled. Outgoing rows inferred from current-target hits can include another player's damage, so leave the fallback disabled during attribution trials.
 
 ## What to return from a shipping-client test
 

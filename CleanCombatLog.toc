@@ -7,5 +7,7 @@
 
 Core.lua
 Display.lua
+SecretDisplay.lua
 CombatLog.lua
 Probe.lua
+PlayerCombat.lua

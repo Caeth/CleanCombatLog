@@ -84,6 +84,7 @@ function CCL:PrintAPIReport()
     Print("C_DamageMeter present:", tostring(C_DamageMeter ~= nil))
     Print("C_DeathRecap present:", tostring(C_DeathRecap ~= nil))
     Print("COMBAT_LOG_EVENT_UNFILTERED registered:", self.CombatLog and tostring(self.CombatLog:IsEventRegistered("COMBAT_LOG_EVENT_UNFILTERED")) or "false")
+    Print("Experimental UNIT_COMBAT adapter enabled:", tostring(self:IsPlayerCombatAdapterEnabled()))
     Print("Use |cffffffff/ccl probe start|r for the Forever event/API instrumentation pass.")
 end
 
@@ -145,6 +146,7 @@ SlashCmdList.CLEANCOMBATLOG = function(message)
         Print("/ccl test        - add representative dummy rows")
         Print("/ccl api         - print client/API diagnostics")
         Print("/ccl cleu        - attempt/toggle COMBAT_LOG_EVENT_UNFILTERED")
+        Print("/ccl unitcombat  - toggle the experimental UNIT_COMBAT adapter")
         Print("/ccl probe ...   - Forever combat API instrumentation")
         Print("/ccl clear       - clear all three columns")
         Print("/ccl lock        - lock the display")
@@ -164,6 +166,8 @@ SlashCmdList.CLEANCOMBATLOG = function(message)
         else
             Print("combat-log module has not loaded.")
         end
+    elseif command == "unitcombat" then
+        CCL:TogglePlayerCombatAdapter()
     elseif command == "probe" then
         if CCL.HandleProbeCommand then
             CCL:HandleProbeCommand(rest)
