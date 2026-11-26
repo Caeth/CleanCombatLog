@@ -100,7 +100,7 @@ end
 
 -- columnIndex: 1 incoming, 2 information/recovery, 3 outgoing.
 -- value may be a Secret Value. Do not inspect or transform it before calling here.
-function CCL:AddSecretValueRow(columnIndex, value, r, g, b, prefixText, suffixText)
+function CCL:AddSecretValueRow(columnIndex, value, r, g, b, prefixText, suffixText, fallbackText)
     if not self.secretRows or not self.secretRows[1] then
         return
     end
@@ -122,7 +122,10 @@ function CCL:AddSecretValueRow(columnIndex, value, r, g, b, prefixText, suffixTe
     cell.prefix:SetText(prefixText or "")
     cell.suffix:SetText(suffixText or "")
     local ok = pcall(cell.value.SetText, cell.value, value)
-    if not ok then cell.value:SetText("") end
+    if not ok then
+        cell.value:SetText("")
+        if fallbackText then cell.prefix:SetText(fallbackText) end
+    end
     cell.value:SetTextColor(r or 1, g or 1, b or 1)
     return ok
 end

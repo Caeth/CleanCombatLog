@@ -99,13 +99,26 @@ local function AddIncomingAmount(label, amountValue, action)
     local color = action == "HEAL" and CCL.COLORS.lightgreen
         or action == "WOUND" and CCL.COLORS.red or CCL.COLORS.beige
     local prefix = color .. label .. CCL.COLORS.reset
-    if (action == "WOUND" or action == "HEAL") and not CanAccess(amountValue) then
-        local ok = CCL:AddSecretValueRow(1, amountValue, 1, 1, 1, prefix)
+    local protected = (action == "WOUND" or action == "HEAL") and not CanAccess(amountValue)
+    local showAmount = protected or (amount and amount > 0)
+    local heal = action == "HEAL" and showAmount
+    local red, green, blue = 1, 1, 1
+    local valuePrefix = prefix
+    if heal then
+        red, green, blue = 0.49, 0.80, 0.43
+        valuePrefix = ""
+    end
+    local value = ""
+    if protected then
+        value = amountValue
+    elseif showAmount then
+        value = amount
+    end
+    local ok = CCL:AddSecretValueRow(1, value, red, green, blue, valuePrefix, nil, prefix)
+    if protected then
         local pane = CCL.personalFeedPane
         local counter = ok and "amountsAccepted" or "amountErrors"
         pane[counter] = pane[counter] + 1
-    else
-        CCL:AddSecretValueRow(1, amount and amount > 0 and amount or "", 1, 1, 1, prefix)
     end
 end
 
