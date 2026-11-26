@@ -12,6 +12,23 @@ end
 
 CCL.Print = Print
 
+local function CanAccess(v)
+    if canaccessvalue then
+        local ok, accessible = pcall(canaccessvalue, v)
+        if not ok or not accessible then return false end
+    end
+    if issecretvalue then
+        local ok, secret = pcall(issecretvalue, v)
+        if not ok or secret then return false end
+    end
+    if issecrettable and type(v) == "table" then
+        local ok, secret = pcall(issecrettable, v)
+        if not ok or secret then return false end
+    end
+    return true
+end
+CCL.CanAccess = CanAccess
+
 local defaults = {
     point = "CENTER",
     relativePoint = "CENTER",
@@ -50,12 +67,18 @@ function CCL:GetCombatLogAPIMode()
     return nil
 end
 
+function CCL:IsForeverClient()
+    return WOW_PROJECT_ID ~= nil
+        and (WOW_PROJECT_ID == WOW_PROJECT_CAMELOT or WOW_PROJECT_ID == 18)
+end
+
 function CCL:PrintAPIReport()
     local version, build, buildDate, interfaceVersion = GetBuildInfo()
 
     Print("version:", self.version)
     Print("client:", version or "?", "build:", build or "?", "interface:", interfaceVersion or "?")
     Print("WOW_PROJECT_ID:", tostring(WOW_PROJECT_ID))
+    Print("WOW_PROJECT_CAMELOT:", tostring(WOW_PROJECT_CAMELOT), "Forever project:", tostring(self:IsForeverClient()))
     Print("combat-log payload API:", self:GetCombatLogAPIMode() or "NOT FOUND")
     Print("C_CombatText.GetCurrentEventInfo:", tostring(C_CombatText and C_CombatText.GetCurrentEventInfo ~= nil))
     Print("C_DamageMeter present:", tostring(C_DamageMeter ~= nil))

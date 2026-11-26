@@ -8,12 +8,16 @@ local records, counts, registration = {}, {}, {}
 local formatterRestoreSettings, formatterRestoreFilteredEvents, formatterProfile
 local formatterPreview, formatterPreviewRows, formatterPreviewIndex
 local MAX_RECORDS = 2500
+local nextID, phase, refilterUntil = 0, 0, 0
+local units, auraSnapshots = {}, {}
+local comparisonStart
 
 local EVENTS = {
     "PLAYER_SWING", "PLAYER_SWING_RANGE_UPDATE",
+    "ADDON_ACTION_BLOCKED", "ADDON_ACTION_FORBIDDEN",
     "COMBAT_LOG_MESSAGE", "COMBAT_LOG_APPLY_FILTER_SETTINGS", "COMBAT_LOG_REFILTER_ENTRIES",
     "COMBAT_TEXT_UPDATE",
-    "UNIT_COMBAT", "UNIT_AURA",
+    "UNIT_COMBAT", "UNIT_AURA", "PARTY_KILL", "UNIT_DIED",
     "UNIT_SPELLCAST_SENT", "UNIT_SPELLCAST_START", "UNIT_SPELLCAST_STOP",
     "UNIT_SPELLCAST_DELAYED", "UNIT_SPELLCAST_SUCCEEDED",
     "UNIT_SPELLCAST_FAILED", "UNIT_SPELLCAST_FAILED_QUIET",
@@ -33,18 +37,7 @@ local function Now()
     return GetTimePreciseSec and GetTimePreciseSec() or GetTime()
 end
 
-local function CanAccess(v)
-    if v == nil then return true end
-    if canaccessvalue then
-        local ok, result = pcall(canaccessvalue, v)
-        if ok then return result and true or false end
-    end
-    if issecretvalue then
-        local ok, result = pcall(issecretvalue, v)
-        if ok then return not result end
-    end
-    return true
-end
+local CanAccess = CCL.CanAccess
 
 local function Safe(v)
     if not CanAccess(v) then return "<secret>" end
@@ -53,10 +46,6 @@ local function Safe(v)
     if kind == "string" or kind == "number" or kind == "boolean" then
         local ok, text = pcall(tostring, v)
         return ok and text or ("<protected-" .. kind .. ">")
-    end
-    if kind == "table" and issecrettable then
-        local ok, secret = pcall(issecrettable, v)
-        if ok and secret then return "<secret-table>" end
     end
     return "<" .. kind .. ">"
 end
@@ -77,7 +66,10 @@ local function Context()
 end
 
 local function Add(kind, event, args, extra)
-    records[#records + 1] = {
+    nextID = nextID + 1
+    local record = {
+        id = nextID,
+        phase = phase,
         t = Now() - startedAt,
         kind = kind,
         event = event,
@@ -86,7 +78,30 @@ local function Add(kind, event, args, extra)
         context = Context(),
         extra = extra,
     }
+    records[#records + 1] = record
     if #records > MAX_RECORDS then table.remove(records, 1) end
+    return record
+end
+
+local function PulseState()
+    local filters = Blizzard_CombatLog_Filters
+    local index, name
+    if CanAccess(filters) and type(filters) == "table" then
+        index = filters.currentFilter
+        if CanAccess(index) and type(index) == "number"
+            and CanAccess(filters.filters) and type(filters.filters) == "table" then
+            local profile = filters.filters[index]
+            if CanAccess(profile) and type(profile) == "table" then name = profile.name end
+        end
+    end
+    return {
+        filter = Safe(index),
+        filterName = Safe(name),
+        filteredEvents = SafeCall(C_CombatLog and C_CombatLog.AreFilteredEventsEnabled),
+        chatFrameShown = SafeCall(ChatFrame2 and ChatFrame2.IsVisible, ChatFrame2),
+        experiment = formatterProfile or "none",
+        nearRefilter = Now() <= refilterUntil,
+    }
 end
 
 local function Capture(event, ...)
@@ -99,7 +114,162 @@ local function Capture(event, ...)
             args[i] = Safe(select(i, ...))
         end
     end
-    Add("event", event, args)
+    local record = Add("event", event, args)
+    if event == "COMBAT_LOG_MESSAGE" then
+        record.pulse = PulseState()
+    elseif event == "UNIT_COMBAT" or event == "UNIT_AURA" then
+        local unit = args[1]
+        if units[unit] or (unit and unit:match("^nameplate%d+$")) then
+            record.unitGUID = SafeCall(UnitGUID, unit)
+            record.engaged = SafeCall(UnitAffectingCombat, unit)
+        end
+    elseif event == "PARTY_KILL" or event == "UNIT_DIED" then
+        local matched = {}
+        for unit in pairs(units) do
+            local guid = SafeCall(UnitGUID, unit)
+            if not guid:match("^<") and guid ~= "nil" then
+                if guid == args[1] then matched[#matched + 1] = "arg1=" .. unit end
+                if guid == args[2] then matched[#matched + 1] = "arg2=" .. unit end
+            end
+        end
+        table.sort(matched)
+        record.extra = matched
+    end
+end
+
+local function Readable(value, kind)
+    if CanAccess(value) and type(value) == kind then return value end
+end
+
+local function TrackUnit(unit, reason)
+    auraSnapshots[unit] = nil
+    units[unit] = true
+    Add("unit", reason, {unit, SafeCall(UnitGUID, unit), SafeCall(UnitAffectingCombat, unit)})
+end
+
+local function AuraIDs(unit, update)
+    local query = C_UnitAuras and C_UnitAuras.GetUnitAuraInstanceIDs
+    if not query then return end
+    local guid = SafeCall(UnitGUID, unit)
+    local prior = auraSnapshots[unit]
+    local snapshot = {guid = guid}
+    local args = {unit, "guid=" .. guid}
+    update = Readable(update, "table")
+    if update then args[#args + 1] = "full=" .. Safe(update.isFullUpdate) end
+    for _, filter in ipairs({"HELPFUL", "HARMFUL"}) do
+        local ok, ids = pcall(query, unit, filter)
+        ids = ok and Readable(ids, "table")
+        local set
+        if ids then
+            set = {}
+            for i = 1, #ids do
+                local id = Readable(ids[i], "number")
+                if not id then
+                    set = nil
+                    break
+                end
+                set[id] = true
+            end
+        end
+        local previous = prior and prior.guid == guid and guid ~= "nil" and prior[filter]
+        local changes = {}
+        if set then
+            for id in pairs(set) do
+                if not previous or not previous[id] then
+                    changes[#changes + 1] = (previous and "+" or "=") .. id
+                end
+            end
+            if previous then
+                for id in pairs(previous) do
+                    if not set[id] then changes[#changes + 1] = "-" .. id end
+                end
+            end
+            table.sort(changes)
+            snapshot[filter] = set
+        end
+        args[#args + 1] = filter .. "=" .. (set and table.concat(changes, ",")
+            or (ok and "<unreadable>" or "<error>"))
+    end
+    local updated = update and Readable(update.updatedAuraInstanceIDs, "table")
+    if updated then
+        local ids = {}
+        for i = 1, #updated do ids[i] = Safe(updated[i]) end
+        args[#args + 1] = "updated=" .. table.concat(ids, ",")
+    end
+    auraSnapshots[unit] = snapshot
+    local record = Add("aura", "INSTANCE_IDS", args)
+    record.unitGUID = guid
+end
+
+local function SeedUnits()
+    for _, unit in ipairs({"player", "pet", "target", "focus", "pettarget"}) do
+        TrackUnit(unit, "BASELINE")
+        if unit == "player" or SafeCall(UnitExists, unit) == "true" then AuraIDs(unit) end
+    end
+    for i = 1, 40 do
+        local unit = "nameplate" .. i
+        if SafeCall(UnitExists, unit) == "true" then
+            TrackUnit(unit, "BASELINE")
+            AuraIDs(unit)
+        end
+    end
+end
+
+local CORRELATION_WINDOW = 0.75
+
+local function Candidates()
+    local result, pulseUses = {}, {}
+    local first = 1
+    for i, hit in ipairs(records) do
+        local aura = hit.kind == "aura"
+        if hit.event == "UNIT_COMBAT" or aura then
+            while records[first].t < hit.t - CORRELATION_WINDOW do first = first + 1 end
+            local entry = {id = hit.id, t = hit.t, args = hit.args, guid = hit.unitGUID,
+                candidates = {}, pulses = 0, otherResults = 0, aliases = 0, omitted = 0}
+            for j = first, #records do
+                local other = records[j]
+                local dt = other.t - hit.t
+                if dt > CORRELATION_WINDOW then break end
+                local event, unit = other.event, other.args[1]
+                local pulse = not aura and other.pulse and not other.pulse.nearRefilter
+                local unitCast = event:match("^UNIT_SPELLCAST_") and
+                    (unit == "player" or unit == "pet" or unit == "<secret>")
+                local resultEvent = not aura and event == "UNIT_COMBAT" and i ~= j
+                local combatText = not aura and event == "C_CombatText.GetCurrentEventInfo"
+                    and (hit.args[1] == "player" or hit.args[1] == "pet")
+                if other.phase == hit.phase and (pulse or unitCast or resultEvent or combatText
+                    or (not aura and event == "PLAYER_SWING")) then
+                    local alias = resultEvent and hit.unitGUID and hit.unitGUID ~= "nil"
+                        and not hit.unitGUID:match("^<") and hit.unitGUID == other.unitGUID
+                        and hit.args[1] ~= unit and hit.args[2] == other.args[2]
+                        and hit.args[3] == other.args[3] and hit.args[4] == other.args[4]
+                        and tonumber(hit.args[4]) ~= nil and hit.args[5] == other.args[5]
+                    if #entry.candidates < 40 then
+                        entry.candidates[#entry.candidates + 1] = {
+                            id = other.id, dt = dt, event = event, alias = alias or nil,
+                        }
+                    else
+                        entry.omitted = entry.omitted + 1
+                    end
+                    if pulse then
+                        entry.pulses = entry.pulses + 1
+                        pulseUses[other.id] = (pulseUses[other.id] or 0) + 1
+                    elseif resultEvent then
+                        entry.otherResults = entry.otherResults + 1
+                        if alias then entry.aliases = entry.aliases + 1 end
+                    end
+                end
+            end
+            result[#result + 1] = entry
+        end
+    end
+    for _, entry in ipairs(result) do
+        for _, candidate in ipairs(entry.candidates) do
+            candidate.pulseUses = pulseUses[candidate.id]
+            if (candidate.pulseUses or 0) > 1 then entry.sharedPulse = true end
+        end
+    end
+    return result
 end
 
 local function Metadata()
@@ -111,6 +281,7 @@ local function Metadata()
         buildDate = buildDate,
         interfaceVersion = interfaceVersion,
         projectID = WOW_PROJECT_ID,
+        forever = CCL:IsForeverClient(),
     }
 end
 
@@ -119,6 +290,7 @@ local function Persist()
         CleanCombatLogDB.probe = {
             metadata = Metadata(), counts = counts,
             registration = registration, records = records,
+            correlationWindow = CORRELATION_WINDOW, correlation = Candidates(),
         }
     end
 end
@@ -153,12 +325,14 @@ local METER_TYPES = {
 }
 
 local function TableLength(v)
-    if not CanAccess(v) or type(v) ~= "table" then return "<secret>" end
+    if not CanAccess(v) or type(v) ~= "table" then return Safe(v) end
     local ok, n = pcall(function() return #v end)
-    return ok and tostring(n) or "<error>"
+    return ok and Safe(n) or "<error>"
 end
 
-local function Meter(quiet)
+local function Meter(quiet, encounter)
+    local postCombat = not (InCombatLockdown and InCombatLockdown())
+    local localTotals = {}
     if not C_DamageMeter then
         Add("api", "C_DamageMeter", {"unavailable"})
         if not quiet then CCL.Print("probe: C_DamageMeter unavailable.") end
@@ -189,8 +363,44 @@ local function Meter(quiet)
             args[#args+1] = "max=" .. Safe(session.maxAmount)
             args[#args+1] = "duration=" .. Safe(session.durationSeconds)
             args[#args+1] = "sources=" .. TableLength(session.combatSources)
+            local sources = postCombat and Readable(session.combatSources, "table")
+            if sources and metric ~= 10 then
+                for i = 1, #sources do
+                    local source = Readable(sources[i], "table")
+                    if source and Readable(source.isLocalPlayer, "boolean") then
+                        localTotals[metric] = Safe(source.totalAmount)
+                        args[#args + 1] = "localPlayer=" .. localTotals[metric]
+                        break
+                    end
+                end
+            end
         end
         Add("api", "C_DamageMeter.GetCombatSessionFromType", args)
+    end
+    if encounter then
+        local incoming, woundRows, unknown, targetRows, targetAmount = 0, 0, 0, 0, 0
+        for _, record in ipairs(records) do
+            if record.id > encounter.first and record.id <= encounter.last
+                and record.event == "UNIT_COMBAT" and record.args[2] == "WOUND" then
+                local amount = tonumber(record.args[4])
+                if record.args[1] == "player" then
+                    woundRows = woundRows + 1
+                    incoming = incoming + (amount or 0)
+                    if not amount then unknown = unknown + 1 end
+                elseif record.unitGUID and record.args[1] ~= "pet" then
+                    targetRows = targetRows + 1
+                    targetAmount = targetAmount + (amount or 0)
+                end
+            end
+        end
+        Add("compare", "DAMAGE_METER", {
+            "start=#" .. encounter.first, "end=#" .. encounter.last,
+            "capture=" .. ((records[1] and records[1].id <= encounter.first) and "retained" or "truncated"),
+            "playerWounds=" .. woundRows, "playerReadableDamage=" .. incoming,
+            "playerUnreadableAmounts=" .. unknown, "meterLocalDamageTaken=" .. (localTotals[7] or "?"),
+            "meterLocalDamageDone=" .. (localTotals[0] or "?"),
+            "unattributedTrackedWounds=" .. targetRows, "unattributedReadableDamage=" .. targetAmount,
+        })
     end
     if not quiet then CCL.Print("probe: damage-meter snapshot captured.") end
 end
@@ -210,7 +420,18 @@ local RECAP_FIELDS = {
     "absorbed", "critical", "glancing", "crushing", "isOffHand", "currentHP",
 }
 
-local function DeathRecap(quiet)
+local function DeathRecap(quiet, deathID)
+    if deathID then
+        local args = {"death=#" .. deathID}
+        for i = #records, 1, -1 do
+            local record = records[i]
+            if record.id < deathID and record.event == "UNIT_COMBAT" and record.args[1] == "player" then
+                args[#args + 1] = "#" .. record.id .. " " .. table.concat(record.args, "/")
+                if #args >= 11 then break end
+            end
+        end
+        Add("compare", "DEATH_RECAP", args)
+    end
     if not C_DeathRecap or not C_DeathRecap.GetRecapEvents then
         Add("api", "C_DeathRecap.GetRecapEvents", {"unavailable"})
         return
@@ -219,7 +440,7 @@ local function DeathRecap(quiet)
     if C_DeathRecap.HasRecapEvents then
         local ok, hasEvents = pcall(C_DeathRecap.HasRecapEvents)
         Add("api", "C_DeathRecap.HasRecapEvents", {ok and Safe(hasEvents) or "<error>"})
-        if ok and hasEvents == false then return end
+        if ok and CanAccess(hasEvents) and hasEvents == false then return end
     end
 
     local ok, recap = pcall(C_DeathRecap.GetRecapEvents)
@@ -235,7 +456,7 @@ local function DeathRecap(quiet)
         if CanAccess(info) and type(info) == "table" then
             for _, field in ipairs(RECAP_FIELDS) do
                 local fieldOK, value = pcall(function() return info[field] end)
-                if fieldOK and value ~= nil then args[#args+1] = field .. "=" .. Safe(value) end
+                if fieldOK then args[#args+1] = field .. "=" .. Safe(value) end
             end
         else
             args[#args+1] = "<secret-event>"
@@ -273,6 +494,7 @@ local function RestoreCombatText()
 end
 
 local function DeepCopy(value, seen)
+    if not CanAccess(value) then error("protected formatter setting") end
     if type(value) ~= "table" then return value end
     seen = seen or {}
     if seen[value] then return seen[value] end
@@ -300,14 +522,19 @@ local function GetFormatterProfile(profileName)
     end
 
     local container = Blizzard_CombatLog_Filters
-    if type(container) ~= "table" or type(container.filters) ~= "table" then
+    if not CanAccess(container) or type(container) ~= "table"
+        or not CanAccess(container.filters) or type(container.filters) ~= "table" then
         return nil, "built-in combat-log filter table unavailable"
     end
 
     local index
     profileName = (profileName or "current"):lower()
     if profileName == "current" then
-        index = tonumber(container.currentFilter) or 1
+        local current = container.currentFilter
+        if not CanAccess(current) or type(current) ~= "number" then
+            return nil, "current filter index unavailable"
+        end
+        index = current
     elseif profileName == "myactions" or profileName == "mine" then
         index = 1
     elseif profileName == "me" or profileName == "incoming" then
@@ -317,11 +544,15 @@ local function GetFormatterProfile(profileName)
     end
 
     local profile = container.filters[index]
-    if type(profile) ~= "table" or type(profile.filters) ~= "table" or type(profile.settings) ~= "table" then
+    if not CanAccess(profile) or type(profile) ~= "table"
+        or not CanAccess(profile.filters) or type(profile.filters) ~= "table"
+        or not CanAccess(profile.settings) or type(profile.settings) ~= "table" then
         return nil, "selected built-in filter profile is incomplete"
     end
 
-    return DeepCopy(profile), nil, index
+    local ok, copy = pcall(DeepCopy, profile)
+    if not ok then return nil, "formatter settings could not be copied safely" end
+    return copy, nil, index
 end
 
 local function CreateFormatterPreview()
@@ -367,7 +598,12 @@ local function ShowFormatterMessage(message, r, g, b)
 
     formatterPreviewIndex = (formatterPreviewIndex % #formatterPreviewRows) + 1
     local row = formatterPreviewRows[formatterPreviewIndex]
-    row:SetText(message)
+    local ok, err = pcall(row.SetText, row, message)
+    counts[ok and "PREVIEW_SET_TEXT_OK" or "PREVIEW_SET_TEXT_ERROR"] =
+        (counts[ok and "PREVIEW_SET_TEXT_OK" or "PREVIEW_SET_TEXT_ERROR"] or 0) + 1
+    if not ok and counts.PREVIEW_SET_TEXT_ERROR == 1 then
+        Add("probe", "PREVIEW_SET_TEXT_ERROR", {Safe(err)})
+    end
 
     if CanAccess(r) and CanAccess(g) and CanAccess(b)
         and type(r) == "number" and type(g) == "number" and type(b) == "number" then
@@ -385,18 +621,20 @@ local function SaveFormatterRestoreState()
     formatterRestoreSettings = profile
     if C_CombatLog and C_CombatLog.AreFilteredEventsEnabled then
         local ok, enabled = pcall(C_CombatLog.AreFilteredEventsEnabled)
-        if ok then formatterRestoreFilteredEvents = enabled end
+        if ok and CanAccess(enabled) and type(enabled) == "boolean" then
+            formatterRestoreFilteredEvents = enabled
+        end
     end
     return true
 end
 
 local function FormatterStatus()
     local hasApply = C_CombatLog and type(C_CombatLog.ApplyFilterSettings) == "function"
-    local loaded = EnsureBlizzardCombatLogLoaded()
-    local current = loaded and Blizzard_CombatLog_Filters and Blizzard_CombatLog_Filters.currentFilter or nil
+    local state = PulseState()
 
     CCL.Print("formatter ApplyFilterSettings:", tostring(hasApply))
-    CCL.Print("formatter Blizzard filters:", tostring(loaded), "currentFilter:", tostring(current or "?"))
+    CCL.Print("formatter reported filter:", state.filterName, "currentFilter:", state.filter)
+    CCL.Print("Blizzard combat chat frame visible:", state.chatFrameShown)
     CCL.Print("formatter active probe profile:", formatterProfile or "none")
     CCL.Print("formatter restore snapshot:", formatterRestoreSettings and "saved" or "not saved")
     if C_CombatLog and C_CombatLog.AreFilteredEventsEnabled then
@@ -404,17 +642,18 @@ local function FormatterStatus()
     end
 end
 
+local RestoreFormatter
+
 local function ApplyFormatter(profileName, mode)
+    local modeName = (mode or "compact"):lower()
+    if modeName ~= "compact" and modeName ~= "full" then
+        CCL.Print("probe: formatter mode must be compact or full.")
+        return
+    end
+    mode = modeName
     if not C_CombatLog or type(C_CombatLog.ApplyFilterSettings) ~= "function" then
         CCL.Print("probe: C_CombatLog.ApplyFilterSettings unavailable.")
         Add("api", "C_CombatLog.ApplyFilterSettings", {"unavailable"})
-        return
-    end
-
-    local saved, saveErr = SaveFormatterRestoreState()
-    if not saved then
-        CCL.Print("probe: cannot snapshot current combat-log settings:", saveErr)
-        Add("api", "C_CombatLog.ApplyFilterSettings", {"snapshot-failed", saveErr})
         return
     end
 
@@ -424,9 +663,11 @@ local function ApplyFormatter(profileName, mode)
         return
     end
 
-    mode = (mode or "compact"):lower()
-    if mode ~= "compact" and mode ~= "full" then
-        CCL.Print("probe: formatter mode must be compact or full.")
+    local hadSnapshot = formatterRestoreSettings ~= nil
+    local saved, saveErr = SaveFormatterRestoreState()
+    if not saved then
+        CCL.Print("probe: cannot snapshot current combat-log settings:", saveErr)
+        Add("api", "C_CombatLog.ApplyFilterSettings", {"snapshot-failed", saveErr})
         return
     end
 
@@ -435,12 +676,19 @@ local function ApplyFormatter(profileName, mode)
     profile.settings.amountColoring = true
     profile.settings.amountSchoolColoring = true
 
+    phase = phase + 1
+    refilterUntil = Now() + 0.75
     local ok, result = pcall(C_CombatLog.ApplyFilterSettings, profile)
     Add("api", "C_CombatLog.ApplyFilterSettings",
         {profileName or "current", mode, "index=" .. tostring(index or "?"), ok and "ok" or "<error>", ok and "nil" or Safe(result)})
 
     if not ok then
         CCL.Print("probe: ApplyFilterSettings failed:", Safe(result))
+        if not hadSnapshot then
+            formatterRestoreSettings, formatterRestoreFilteredEvents = nil, nil
+        else
+            RestoreFormatter()
+        end
         return
     end
 
@@ -457,7 +705,7 @@ local function ApplyFormatter(profileName, mode)
     CCL.Print("Protected COMBAT_LOG_MESSAGE lines will appear in the preview unchanged.")
 end
 
-local function RestoreFormatter()
+RestoreFormatter = function()
     if not formatterRestoreSettings then
         CCL.Print("probe: no formatter restore snapshot is available.")
         return
@@ -467,6 +715,8 @@ local function RestoreFormatter()
         return
     end
 
+    phase = phase + 1
+    refilterUntil = Now() + 0.75
     local ok, result = pcall(C_CombatLog.ApplyFilterSettings, formatterRestoreSettings)
     Add("api", "C_CombatLog.ApplyFilterSettings", {"restore", ok and "ok" or "<error>", ok and "nil" or Safe(result)})
 
@@ -497,6 +747,8 @@ local function FormatterCommand(text)
         ApplyFormatter(profile, action)
     elseif action == "refilter" then
         if C_CombatLog and C_CombatLog.RefilterEntries then
+            phase = phase + 1
+            refilterUntil = Now() + 0.75
             local ok, err = pcall(C_CombatLog.RefilterEntries)
             Add("api", "C_CombatLog.RefilterEntries", {ok and "ok" or "<error>", ok and "nil" or Safe(err)})
             CCL.Print(ok and "probe: combat-log refilter requested." or ("probe: refilter failed: " .. Safe(err)))
@@ -517,23 +769,37 @@ end
 local function PrintRecord(r)
     local args = r.args and table.concat(r.args, " | ") or ""
     local target = r.context and r.context.targetGUID
-    CCL.Print(string.format("%8.3f", r.t or 0), r.kind or "?", r.event or "?", args,
-        target and target ~= "nil" and ("target=" .. target) or "")
+    local pulse = r.pulse or (r.event == "MARK" and r.extra)
+    CCL.Print(string.format("#%d %8.3f", r.id, r.t), r.kind, r.event, args,
+        r.unitGUID and ("unitGUID=" .. r.unitGUID) or "",
+        target and target ~= "nil" and ("target=" .. target) or "",
+        pulse and ("filter=" .. pulse.filter .. "/" .. pulse.filterName .. " enabled=" .. pulse.filteredEvents
+            .. " visible=" .. pulse.chatFrameShown .. " experiment=" .. pulse.experiment
+            .. (pulse.nearRefilter and " near-refilter" or "")) or "",
+        (r.event == "PARTY_KILL" or r.event == "UNIT_DIED") and table.concat(r.extra or {}, " ") or "")
 end
 
 function CCL:StartCombatProbe()
     if active then self.Print("probe is already running."); return end
     records, counts, registration = {}, {}, {}
+    units, auraSnapshots = {}, {}
+    nextID, phase, refilterUntil, comparisonStart = 0, 0, 0, nil
     startedAt, active = Now(), true
     local registered = RegisterAll()
     Add("probe", "START", {}, Metadata())
+    SeedUnits()
     self.Print("Forever combat probe started;", registered, "of", #EVENTS, "candidate events registered.")
 end
 
 function CCL:StopCombatProbe()
     if not active then self.Print("probe is not running."); return end
     Add("probe", "STOP")
-    Persist(); UnregisterAll(); RestoreCombatText(); if formatterRestoreSettings then RestoreFormatter() end; active = false
+    active = false
+    UnregisterAll()
+    RestoreCombatText()
+    if formatterRestoreSettings then RestoreFormatter() end
+    if formatterPreview then formatterPreview:Hide() end
+    Persist()
     self.Print("probe stopped;", #records, "sanitised records saved in CleanCombatLogDB.probe.")
 end
 
@@ -541,6 +807,7 @@ function CCL:PrintCombatProbeStatus()
     local version, build, _, interfaceVersion = GetBuildInfo()
     self.Print("probe:", active and "RUNNING" or "stopped", "records:", #records)
     self.Print("client:", version or "?", "build:", build or "?", "interface:", interfaceVersion or "?", "project:", tostring(WOW_PROJECT_ID))
+    self.Print("Forever project:", tostring(self:IsForeverClient()))
     self.Print("PLAYER_SWING:", registration.PLAYER_SWING or "not attempted", "UNIT_COMBAT:", registration.UNIT_COMBAT or "not attempted")
     self.Print("COMBAT_LOG_MESSAGE:", registration.COMBAT_LOG_MESSAGE or "not attempted")
     self.Print("C_DamageMeter:", tostring(C_DamageMeter ~= nil), "C_DeathRecap:", tostring(C_DeathRecap ~= nil))
@@ -576,13 +843,65 @@ function CCL:HandleProbeCommand(rest)
     elseif cmd == "death" then DeathRecap(false)
     elseif cmd == "combattext" then SetCombatTextUnit(arg ~= "" and arg or "player")
     elseif cmd == "formatter" then FormatterCommand(arg)
-    elseif cmd == "clear" then records, counts, registration = {}, {}, {}; if CleanCombatLogDB then CleanCombatLogDB.probe = nil end; self.Print("probe data cleared.")
-    else self.Print("probe commands: start, stop, status, summary, dump [n], events, meter, death, combattext <unit>, formatter <action>, clear") end
+    elseif cmd == "mark" then
+        if not active then self.Print("start the probe before adding a marker."); return end
+        phase = phase + 1
+        local marker = Add("probe", "MARK", {arg}, PulseState())
+        self.Print("probe marker #" .. marker.id, arg)
+    elseif cmd == "correlate" then
+        local report = Candidates()
+        local limit = math.max(1, math.min(tonumber(arg) or 10, 40))
+        for i = math.max(1, #report - limit + 1), #report do
+            local result = report[i]
+            self.Print("result #" .. result.id, table.concat(result.args, " | "),
+                "pulses=" .. result.pulses, result.sharedPulse and "shared pulse" or "",
+                "nearby results=" .. result.otherResults, "possible aliases=" .. result.aliases,
+                "omitted=" .. result.omitted)
+            for _, candidate in ipairs(result.candidates) do
+                self.Print(string.format("  #%d %+.3fs", candidate.id, candidate.dt), candidate.event,
+                    candidate.pulseUses and ("pulse uses=" .. candidate.pulseUses) or "",
+                    candidate.alias and "possible alias" or "")
+            end
+        end
+    elseif cmd == "clear" then
+        records, counts, auraSnapshots, comparisonStart = {}, {}, {}, nil
+        if CleanCombatLogDB then CleanCombatLogDB.probe = nil end
+        self.Print("probe data cleared.")
+    else self.Print("probe commands: start, stop, status, summary, dump [n], events, meter, death, mark <label>, correlate [n], combattext <unit>, formatter <action>, clear") end
 end
 
 frame:SetScript("OnEvent", function(_, event, ...)
     if not active then return end
+    if event == "COMBAT_LOG_APPLY_FILTER_SETTINGS" or event == "COMBAT_LOG_REFILTER_ENTRIES" then
+        phase = phase + 1
+        refilterUntil = Now() + CORRELATION_WINDOW
+    end
     Capture(event, ...)
+
+    local firstArg = ...
+    local unit = Readable(firstArg, "string")
+    if event == "NAME_PLATE_UNIT_ADDED" and unit then
+        TrackUnit(unit, event)
+        AuraIDs(unit)
+    elseif event == "NAME_PLATE_UNIT_REMOVED" and unit then
+        units[unit], auraSnapshots[unit] = nil, nil
+    elseif event == "UNIT_AURA" and unit and (units[unit] or unit:match("^nameplate%d+$")) then
+        AuraIDs(unit, select(2, ...))
+    elseif event == "PLAYER_TARGET_CHANGED" then
+        TrackUnit("target", event)
+        AuraIDs("target")
+    elseif event == "PLAYER_FOCUS_CHANGED" then
+        TrackUnit("focus", event)
+        AuraIDs("focus")
+    elseif event == "UNIT_PET" and unit == "player" then
+        TrackUnit("pet", event)
+        TrackUnit("pettarget", event)
+        AuraIDs("pet")
+        AuraIDs("pettarget")
+    elseif event == "UNIT_TARGET" and unit == "pet" then
+        TrackUnit("pettarget", event)
+        AuraIDs("pettarget")
+    end
 
     if event == "COMBAT_LOG_MESSAGE" then
         ShowFormatterMessage(...)
@@ -592,12 +911,31 @@ frame:SetScript("OnEvent", function(_, event, ...)
         or (event == "PLAYER_FOCUS_CHANGED" and combatTextUnit == "focus") then
         SetCombatTextUnit(combatTextUnit)
     elseif event == "PLAYER_DEAD" and C_Timer and C_Timer.After then
-        C_Timer.After(0.5, function() if active then DeathRecap(true); Persist() end end)
+        local capture, deathID = records, nextID
+        C_Timer.After(0.5, function()
+            if active and records == capture then
+                DeathRecap(true, deathID)
+                Persist()
+            end
+        end)
     end
 
-    if event == "PLAYER_REGEN_ENABLED" and C_Timer and C_Timer.After then
-        C_Timer.After(0.25, function() if active then Meter(true); Persist() end end)
-    elseif event == "DAMAGE_METER_RESET" then
-        Persist()
+    if event == "PLAYER_REGEN_DISABLED" then
+        comparisonStart = nextID
+    elseif event == "PLAYER_REGEN_ENABLED" then
+        local capture = records
+        local encounter = comparisonStart and {first = comparisonStart, last = nextID}
+        comparisonStart = nil
+        if C_Timer and C_Timer.After then
+            C_Timer.After(0.25, function()
+                if active and records == capture and not comparisonStart then
+                    Meter(true, encounter)
+                    Persist()
+                end
+            end)
+        else
+            Meter(true, encounter)
+            Persist()
+        end
     end
 end)
