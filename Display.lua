@@ -121,16 +121,25 @@ function CCL:CreateDisplay()
     local outgoing = CreateColumn(frame, "LEFT")
 
     self.columns = {incoming, info, outgoing}
+    self.personalFeedHeaders = {}
+    for index, title in ipairs({"Incoming", "Effects", "Outgoing"}) do
+        local header = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        header:SetPoint("TOPLEFT", self.columns[index], "TOPLEFT", 2, 0)
+        header:SetText(title)
+        header:Hide()
+        self.personalFeedHeaders[index] = header
+    end
 
     local function Layout()
         local width = frame:GetWidth()
         local usable = width - (gap * 2)
         local personal = CCL.personalFeedVisible
         local sideWidth = floor(usable * (personal and 0.20 or 0.31))
-        local infoWidth = personal and floor(usable * 0.16) or usable - (sideWidth * 2)
+        local infoWidth = personal and floor(usable * 0.20) or usable - (sideWidth * 2)
+        local contentTop = personal and top + 15 or top
 
         incoming:ClearAllPoints()
-        incoming:SetPoint("TOPLEFT", frame, "TOPLEFT", 0, -top)
+        incoming:SetPoint("TOPLEFT", frame, "TOPLEFT", 0, -contentTop)
         incoming:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", 0, 0)
         incoming:SetWidth(sideWidth)
 
@@ -169,6 +178,11 @@ function CCL:SetPersonalFeedVisible(visible)
     self.columns[3]:SetShown(not visible)
     self.personalFeedPane:SetShown(visible)
     self.Layout()
+    for index, header in ipairs(self.personalFeedHeaders) do
+        header:ClearAllPoints()
+        header:SetPoint("BOTTOMLEFT", self.columns[index], "TOPLEFT", 2, 3)
+        header:SetShown(visible)
+    end
 end
 
 function CCL:SetChromeVisible(visible)
