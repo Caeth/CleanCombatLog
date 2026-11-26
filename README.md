@@ -1,6 +1,14 @@
-# CleanCombatLog 0.2.0-probe
+# CleanCombatLog
 
 This build provides **World of Warcraft: Forever combat API instrumentation** and an opt-in experimental combat display.
+
+## Personal combat feed
+
+The personal feed starts enabled on Forever. Open Blizzard's **Combat Log**, choose **My Actions**, and leave that tab visible before you enter combat. Run `/ccl feed` to check readiness, retained lines, and render errors. `/ccl feed off` disables the feed and restores the original display. `/ccl feed on` turns it back on.
+
+The right column shows Blizzard's My Actions lines as supplied by the client. This can include hits, periodic damage, healing from your own abilities, and kills. Mouse-wheel over that column to review up to 160 lines from the current session. Each row has room for about two lines at the default font size. The feed starts collecting on combat entry when My Actions is ready, which avoids most history replay from opening the tab out of combat. Leave the tab open throughout the fight. Messages outside combat and messages from a probe formatter experiment are excluded.
+
+The left column shows incoming player and pet results. Numeric amounts appear when readable. The centre shows combat transitions and player or pet interruptions. The addon uses direct unit events for those rows. It keeps the My Actions text intact and leaves ambiguous outgoing numbers to Blizzard's formatted lines. `/ccl clear` clears all columns and `/ccl move` unlocks the frame for dragging.
 
 The goal is to recover as much of the old `COMBAT_LOG_EVENT_UNFILTERED` capability as Forever actually permits, and only accept missing functionality after direct shipping-client testing shows that it cannot be reconstructed reliably.
 

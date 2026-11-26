@@ -7,6 +7,10 @@ local active, startedAt, combatTextUnit = false, 0, nil
 local records, counts, registration = {}, {}, {}
 local formatterRestoreSettings, formatterRestoreFilteredEvents, formatterProfile
 local formatterPreview, formatterPreviewRows, formatterPreviewIndex
+function frame:IsFormatterExperimentActive()
+    return formatterRestoreSettings ~= nil
+end
+
 local MAX_RECORDS = 2500
 local nextID, phase, refilterUntil = 0, 0, 0
 local units, auraSnapshots = {}, {}

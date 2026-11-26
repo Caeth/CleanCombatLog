@@ -125,8 +125,9 @@ function CCL:CreateDisplay()
     local function Layout()
         local width = frame:GetWidth()
         local usable = width - (gap * 2)
-        local sideWidth = floor(usable * 0.31)
-        local infoWidth = usable - (sideWidth * 2)
+        local personal = CCL.personalFeedVisible
+        local sideWidth = floor(usable * (personal and 0.20 or 0.31))
+        local infoWidth = personal and floor(usable * 0.16) or usable - (sideWidth * 2)
 
         incoming:ClearAllPoints()
         incoming:SetPoint("TOPLEFT", frame, "TOPLEFT", 0, -top)
@@ -163,6 +164,13 @@ function CCL:CreateDisplay()
     end
 end
 
+function CCL:SetPersonalFeedVisible(visible)
+    self.personalFeedVisible = visible
+    self.columns[3]:SetShown(not visible)
+    self.personalFeedPane:SetShown(visible)
+    self.Layout()
+end
+
 function CCL:SetChromeVisible(visible)
     if self.background then
         self.background:SetShown(visible)
@@ -181,6 +189,7 @@ function CCL:Clear()
     for _, column in ipairs(self.columns) do
         column:Clear()
     end
+    if self.ClearPersonalFeed then self:ClearPersonalFeed() end
 end
 
 -- columnIndex: 1 incoming, 2 information, 3 outgoing.
@@ -199,6 +208,7 @@ end
 
 function CCL:RunDisplayTest()
     self:Clear()
+    if self.personalFeedVisible then self:SetPersonalFeedVisible(false) end
 
     local c = COLORS
 

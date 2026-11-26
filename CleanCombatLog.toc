@@ -1,8 +1,8 @@
 ## Interface: 16001
 ## Title: CleanCombatLog
-## Notes: Compact combat log and WoW Forever combat API instrumentation probe.
+## Notes: Personal combat feed and combat API diagnostics for WoW Forever.
 ## Author: CleanCombatLog
-## Version: 0.2.0-probe
+## Version: 0.3.0
 ## SavedVariables: CleanCombatLogDB
 
 Core.lua
@@ -11,3 +11,4 @@ SecretDisplay.lua
 CombatLog.lua
 Probe.lua
 PlayerCombat.lua
+PersonalFeed.lua
