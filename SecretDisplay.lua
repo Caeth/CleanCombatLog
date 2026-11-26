@@ -121,8 +121,10 @@ function CCL:AddSecretValueRow(columnIndex, value, r, g, b, prefixText, suffixTe
 
     cell.prefix:SetText(prefixText or "")
     cell.suffix:SetText(suffixText or "")
-    cell.value:SetText(value)
+    local ok = pcall(cell.value.SetText, cell.value, value)
+    if not ok then cell.value:SetText("") end
     cell.value:SetTextColor(r or 1, g or 1, b or 1)
+    return ok
 end
 
 local originalCreateDisplay = CCL.CreateDisplay

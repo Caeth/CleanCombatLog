@@ -89,12 +89,19 @@ local function AddIncoming(unitValue, actionValue, flagValue, amountValue)
     if not unit or not label then return end
     local amount = Read(amountValue, "number")
     local flag = Read(flagValue, "string")
-    local text = (unit == "pet" and "Pet " or "") .. label
-    if amount and amount > 0 then text = text .. " " .. amount end
-    if flag == "CRITICAL" then text = text .. " •" end
+    if flag == "CRITICAL" then label = label .. " •" end
+    if unit == "pet" then label = "Pet " .. label end
     local color = action == "HEAL" and CCL.COLORS.lightgreen
         or action == "WOUND" and CCL.COLORS.red or CCL.COLORS.beige
-    CCL:AddRow(1, color .. text .. CCL.COLORS.reset)
+    local prefix = color .. label .. CCL.COLORS.reset
+    if (action == "WOUND" or action == "HEAL") and not CanAccess(amountValue) then
+        local ok = CCL:AddSecretValueRow(1, amountValue, 1, 1, 1, prefix)
+        local pane = CCL.personalFeedPane
+        local counter = ok and "amountsAccepted" or "amountErrors"
+        pane[counter] = pane[counter] + 1
+    else
+        CCL:AddSecretValueRow(1, amount and amount > 0 and amount or "", 1, 1, 1, prefix)
+    end
 end
 
 local function OnEvent(listener, event, ...)
@@ -131,6 +138,7 @@ local function SetEnabled(enabled)
     local pane = CCL.personalFeedPane
     listener:UnregisterAllEvents()
     listener.live = false
+    CCL:ClearSecretRows()
     pane.messageRegistered = false
     if enabled then
         for _, event in ipairs(events) do
@@ -146,6 +154,7 @@ function CCL:InitializePersonalFeed()
     local pane = CreateFrame("Frame", nil, self.frame)
     pane:SetAllPoints(self.columns[3])
     pane.rows, pane.latest, pane.count, pane.offset, pane.errors = {}, 0, 0, 0, 0
+    pane.amountsAccepted, pane.amountErrors = 0, 0
     pane:EnableMouseWheel(true)
     pane:SetScript("OnMouseWheel", function(frame, delta)
         frame.offset = math.max(0, frame.offset + (delta > 0 and 1 or -1))
@@ -172,6 +181,7 @@ function CCL:ClearPersonalFeed()
         row:Hide()
     end
     pane.latest, pane.count, pane.offset, pane.errors = 0, 0, 0, 0
+    pane.amountsAccepted, pane.amountErrors = 0, 0
 end
 
 function CCL:HandlePersonalFeedCommand(rest)
@@ -188,6 +198,8 @@ function CCL:HandlePersonalFeedCommand(rest)
         "· My Actions ready", ready and "yes" or "no",
         "· message event registered", pane.messageRegistered and "yes" or "no",
         "· retained lines", pane.count, "· render errors", pane.errors)
+    self.Print("Protected incoming amounts accepted", pane.amountsAccepted,
+        "· amount render errors", pane.amountErrors)
     if CleanCombatLogDB.personalFeedEnabled and not ready then
         self.Print("Open Blizzard's Combat Log and select My Actions before combat.")
     end
