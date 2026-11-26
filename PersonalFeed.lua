@@ -5,7 +5,7 @@ local ROW_HEIGHT = 27
 local HEADER_HEIGHT = 15
 
 local events = {
-    "COMBAT_LOG_MESSAGE", "UNIT_COMBAT", "UNIT_SPELLCAST_INTERRUPTED",
+    "COMBAT_LOG_MESSAGE", "COMBAT_TEXT_UPDATE", "UNIT_COMBAT", "UNIT_SPELLCAST_INTERRUPTED",
     "PLAYER_REGEN_DISABLED", "PLAYER_REGEN_ENABLED",
 }
 
@@ -13,6 +13,12 @@ local results = {
     WOUND = "Hit", HEAL = "Heal", MISS = "Miss", DODGE = "Dodge",
     PARRY = "Parry", BLOCK = "Block", RESIST = "Resist", ABSORB = "Absorb",
     IMMUNE = "Immune", DEFLECT = "Deflect", EVADE = "Evade",
+}
+
+local spellDamage = {
+    SPELL_DAMAGE = "Spell hit",
+    SPELL_DAMAGE_CRIT = "Spell hit •",
+    SPELL_PERIODIC_DAMAGE = "Tick",
 }
 
 local function Read(value, kind)
@@ -82,15 +88,8 @@ local function OwnUnit(value)
     if unit == "player" or unit == "pet" then return unit end
 end
 
-local function AddIncoming(unitValue, actionValue, flagValue, amountValue)
-    local unit = OwnUnit(unitValue)
-    local action = Read(actionValue, "string")
-    local label = results[action]
-    if not unit or not label then return end
+local function AddIncomingAmount(label, amountValue, action)
     local amount = Read(amountValue, "number")
-    local flag = Read(flagValue, "string")
-    if flag == "CRITICAL" then label = label .. " •" end
-    if unit == "pet" then label = "Pet " .. label end
     local color = action == "HEAL" and CCL.COLORS.lightgreen
         or action == "WOUND" and CCL.COLORS.red or CCL.COLORS.beige
     local prefix = color .. label .. CCL.COLORS.reset
@@ -102,6 +101,29 @@ local function AddIncoming(unitValue, actionValue, flagValue, amountValue)
     else
         CCL:AddSecretValueRow(1, amount and amount > 0 and amount or "", 1, 1, 1, prefix)
     end
+end
+
+local function AddIncoming(unitValue, actionValue, flagValue, amountValue)
+    local unit = OwnUnit(unitValue)
+    local action = Read(actionValue, "string")
+    local label = results[action]
+    if not unit or not label then return end
+    if Read(flagValue, "string") == "CRITICAL" then label = label .. " •" end
+    if unit == "pet" then label = "Pet " .. label end
+    AddIncomingAmount(label, amountValue, action)
+end
+
+local function AddCombatTextSpell(eventType)
+    local label = spellDamage[Read(eventType, "string")]
+    if not label or not C_CombatText or not C_CombatText.GetCurrentEventInfo
+        or not C_CombatText.GetActiveUnit then return end
+    local unitOK, unit = pcall(C_CombatText.GetActiveUnit)
+    if not unitOK or Read(unit, "string") ~= "player" then return end
+    local ok, amount = pcall(C_CombatText.GetCurrentEventInfo)
+    if not ok then return end
+    local pane = CCL.personalFeedPane
+    pane.spellRows = pane.spellRows + 1
+    AddIncomingAmount(label, amount, "WOUND")
 end
 
 local function OnEvent(listener, event, ...)
@@ -123,6 +145,8 @@ local function OnEvent(listener, event, ...)
             or CCL.CombatLog:IsEventRegistered("COMBAT_LOG_EVENT_UNFILTERED") then return end
         if event == "UNIT_COMBAT" then
             AddIncoming(...)
+        elseif event == "COMBAT_TEXT_UPDATE" then
+            AddCombatTextSpell(...)
         else
             local unit = OwnUnit(...)
             if unit then
@@ -154,7 +178,7 @@ function CCL:InitializePersonalFeed()
     local pane = CreateFrame("Frame", nil, self.frame)
     pane:SetAllPoints(self.columns[3])
     pane.rows, pane.latest, pane.count, pane.offset, pane.errors = {}, 0, 0, 0, 0
-    pane.amountsAccepted, pane.amountErrors = 0, 0
+    pane.amountsAccepted, pane.amountErrors, pane.spellRows = 0, 0, 0
     pane:EnableMouseWheel(true)
     pane:SetScript("OnMouseWheel", function(frame, delta)
         frame.offset = math.max(0, frame.offset + (delta > 0 and 1 or -1))
@@ -181,7 +205,7 @@ function CCL:ClearPersonalFeed()
         row:Hide()
     end
     pane.latest, pane.count, pane.offset, pane.errors = 0, 0, 0, 0
-    pane.amountsAccepted, pane.amountErrors = 0, 0
+    pane.amountsAccepted, pane.amountErrors, pane.spellRows = 0, 0, 0
 end
 
 function CCL:HandlePersonalFeedCommand(rest)
@@ -199,7 +223,7 @@ function CCL:HandlePersonalFeedCommand(rest)
         "· message event registered", pane.messageRegistered and "yes" or "no",
         "· retained lines", pane.count, "· render errors", pane.errors)
     self.Print("Protected incoming amounts accepted", pane.amountsAccepted,
-        "· amount render errors", pane.amountErrors)
+        "· amount render errors", pane.amountErrors, "· Combat Text spell rows", pane.spellRows)
     if CleanCombatLogDB.personalFeedEnabled and not ready then
         self.Print("Open Blizzard's Combat Log and select My Actions before combat.")
     end

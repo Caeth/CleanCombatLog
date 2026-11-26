@@ -10,6 +10,8 @@ The right column shows Blizzard's My Actions lines as supplied by the client. Th
 
 The left column keeps the last 14 incoming player and pet results. For wounds and heals, the addon passes protected amounts directly to a FontString. The result label remains visible if the client rejects the amount. `/ccl feed` reports accepted protected amounts and setter errors. The centre shows combat transitions and player or pet interruptions. The addon keeps the My Actions text intact and leaves ambiguous outgoing numbers to Blizzard's formatted lines. `/ccl clear` clears all columns and `/ccl move` unlocks the frame for dragging.
 
+The incoming feed also listens for spell damage from Blizzard's Combat Text when it is tracking your player. Enable Blizzard's floating combat text if the spell counter stays at zero during a spell-heavy fight. Spell ticks can appear as **Spell hit** if the client emits the same event for both. A hit may appear twice if both client sources report it. For outgoing spell hits and ticks, enable **Spells → Damage** and **Periodic → Damage** in the My Actions message types.
+
 The goal is to recover as much of the old `COMBAT_LOG_EVENT_UNFILTERED` capability as Forever actually permits, and only accept missing functionality after direct shipping-client testing shows that it cannot be reconstructed reliably.
 
 ## What the probe tests
