@@ -4,13 +4,30 @@ CCL = CCL or {}
 _G.CleanCombatLog = CCL
 
 CCL.name = addonName or "CleanCombatLog"
-CCL.version = "0.1.0-test"
+CCL.version = "0.2.0-probe"
 
 local function Print(...)
     print("|cff7dcde6CleanCombatLog:|r", ...)
 end
 
 CCL.Print = Print
+
+local function CanAccess(v)
+    if canaccessvalue then
+        local ok, accessible = pcall(canaccessvalue, v)
+        if not ok or not accessible then return false end
+    end
+    if issecretvalue then
+        local ok, secret = pcall(issecretvalue, v)
+        if not ok or secret then return false end
+    end
+    if issecrettable and type(v) == "table" then
+        local ok, secret = pcall(issecrettable, v)
+        if not ok or secret then return false end
+    end
+    return true
+end
+CCL.CanAccess = CanAccess
 
 local defaults = {
     point = "CENTER",
@@ -50,17 +67,25 @@ function CCL:GetCombatLogAPIMode()
     return nil
 end
 
+function CCL:IsForeverClient()
+    return WOW_PROJECT_ID ~= nil
+        and (WOW_PROJECT_ID == WOW_PROJECT_CAMELOT or WOW_PROJECT_ID == 18)
+end
+
 function CCL:PrintAPIReport()
     local version, build, buildDate, interfaceVersion = GetBuildInfo()
 
     Print("version:", self.version)
     Print("client:", version or "?", "build:", build or "?", "interface:", interfaceVersion or "?")
     Print("WOW_PROJECT_ID:", tostring(WOW_PROJECT_ID))
+    Print("WOW_PROJECT_CAMELOT:", tostring(WOW_PROJECT_CAMELOT), "Forever project:", tostring(self:IsForeverClient()))
     Print("combat-log payload API:", self:GetCombatLogAPIMode() or "NOT FOUND")
     Print("C_CombatText.GetCurrentEventInfo:", tostring(C_CombatText and C_CombatText.GetCurrentEventInfo ~= nil))
     Print("C_DamageMeter present:", tostring(C_DamageMeter ~= nil))
+    Print("C_DeathRecap present:", tostring(C_DeathRecap ~= nil))
     Print("COMBAT_LOG_EVENT_UNFILTERED registered:", self.CombatLog and tostring(self.CombatLog:IsEventRegistered("COMBAT_LOG_EVENT_UNFILTERED")) or "false")
-    Print("Use |cffffffff/ccl cleu|r to attempt CLEU registration, then attack a target.")
+    Print("Experimental UNIT_COMBAT adapter enabled:", tostring(self:IsPlayerCombatAdapterEnabled()))
+    Print("Use |cffffffff/ccl probe start|r for the Forever event/API instrumentation pass.")
 end
 
 function CCL:SavePosition()
@@ -118,12 +143,14 @@ SlashCmdList.CLEANCOMBATLOG = function(message)
 
     if command == "" or command == "help" then
         Print("commands:")
-        Print("/ccl test  - add representative dummy rows")
-        Print("/ccl api   - print client/API diagnostics")
-        Print("/ccl cleu  - attempt/toggle COMBAT_LOG_EVENT_UNFILTERED")
-        Print("/ccl clear - clear all three columns")
-        Print("/ccl lock  - lock the display")
-        Print("/ccl move  - unlock/move the display")
+        Print("/ccl test        - add representative dummy rows")
+        Print("/ccl api         - print client/API diagnostics")
+        Print("/ccl cleu        - attempt/toggle COMBAT_LOG_EVENT_UNFILTERED")
+        Print("/ccl unitcombat  - toggle the experimental UNIT_COMBAT adapter")
+        Print("/ccl probe ...   - Forever combat API instrumentation")
+        Print("/ccl clear       - clear all three columns")
+        Print("/ccl lock        - lock the display")
+        Print("/ccl move        - unlock/move the display")
         return
     end
 
@@ -138,6 +165,14 @@ SlashCmdList.CLEANCOMBATLOG = function(message)
             CCL:ToggleCLEU()
         else
             Print("combat-log module has not loaded.")
+        end
+    elseif command == "unitcombat" then
+        CCL:TogglePlayerCombatAdapter()
+    elseif command == "probe" then
+        if CCL.HandleProbeCommand then
+            CCL:HandleProbeCommand(rest)
+        else
+            Print("combat probe module has not loaded.")
         end
     elseif command == "clear" then
         if CCL.Clear then

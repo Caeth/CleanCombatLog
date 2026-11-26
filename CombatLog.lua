@@ -6,6 +6,7 @@ CCL.CombatLog = frame
 local playerGUID
 local petGUID
 local enabled = false
+local CanAccess = CCL.CanAccess
 
 local schoolFallback = {
     [1]  = {0.78, 0.61, 0.43}, -- Physical
@@ -287,8 +288,17 @@ local function HandleEvent(...)
 end
 
 local function RefreshGUIDs()
-    playerGUID = UnitGUID("player")
-    petGUID = UnitGUID("pet")
+    local player, pet = UnitGUID("player"), UnitGUID("pet")
+    playerGUID = CanAccess(player) and player or nil
+    petGUID = CanAccess(pet) and pet or nil
+end
+
+local function HandleReadableEvent(ok, ...)
+    if not ok then return end
+    for i = 1, select("#", ...) do
+        if not CanAccess(select(i, ...)) then return end
+    end
+    HandleEvent(...)
 end
 
 function CCL:EnableCLEU()
@@ -298,11 +308,6 @@ function CCL:EnableCLEU()
     end
 
     local api = self:GetCombatLogAPIMode()
-    if not api then
-        self.Print("No supported combat-log payload API was found.")
-        return false
-    end
-
     local ok, result = pcall(function()
         frame:RegisterEvent("COMBAT_LOG_EVENT_UNFILTERED")
         return frame:IsEventRegistered("COMBAT_LOG_EVENT_UNFILTERED")
@@ -310,11 +315,18 @@ function CCL:EnableCLEU()
 
     enabled = ok and result and true or false
 
+    if enabled and not api then
+        frame:UnregisterEvent("COMBAT_LOG_EVENT_UNFILTERED")
+        enabled = false
+        self.Print("CLEU registration succeeded, but no addon-facing payload reader was found.")
+        return false
+    end
+
     if enabled then
         self.Print("CLEU registration succeeded using", api .. ".")
         self.Print("Attack a target; supported events should now populate the shell.")
     else
-        self.Print("CLEU registration did not succeed.", ok and "" or tostring(result))
+        self.Print("CLEU registration did not succeed.", not ok and CanAccess(result) and tostring(result) or "")
         self.Print("If the client reports ADDON_ACTION_FORBIDDEN, Forever is using the restricted model.")
     end
 
@@ -351,16 +363,13 @@ frame:SetScript("OnEvent", function(self, event, ...)
         return
     elseif event == "ADDON_ACTION_FORBIDDEN" or event == "ADDON_ACTION_BLOCKED" then
         local blockedAddon, action = ...
-        if blockedAddon == addonName or blockedAddon == "CleanCombatLog" then
-            CCL.Print(event .. ":", tostring(action or "unknown action"))
-            if action and tostring(action):find("COMBAT_LOG") then
-                CCL.Print("This is direct evidence that the client restricts combat-log registration.")
-            end
+        if CanAccess(blockedAddon) and blockedAddon == addonName then
+            CCL.Print(event .. ":", CanAccess(action) and tostring(action or "unknown action") or "<secret>")
         end
         return
     elseif event == "UNIT_PET" then
         local unit = ...
-        if unit == "player" then
+        if CanAccess(unit) and unit == "player" then
             RefreshGUIDs()
         end
         return
@@ -371,14 +380,6 @@ frame:SetScript("OnEvent", function(self, event, ...)
         CCL:AddRow(2, CCL.COLORS.green .. "-- Combat --|r", "Left combat.")
         return
     elseif event == "COMBAT_LOG_EVENT_UNFILTERED" then
-        local getter = CCL.GetCurrentCombatLogEventInfo
-        if not getter then
-            return
-        end
-
-        local values = {CCL:GetCurrentCombatLogEventInfo()}
-        if #values > 0 then
-            HandleEvent(unpack(values))
-        end
+        HandleReadableEvent(pcall(CCL.GetCurrentCombatLogEventInfo, CCL))
     end
 end)
