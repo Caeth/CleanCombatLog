@@ -1,8 +1,14 @@
 local _, CCL = ...
 local CanAccess = CCL.CanAccess
 local HISTORY_LIMIT = 160
-local ROW_HEIGHT = 24
-local justify = {"CENTER", "CENTER", "LEFT"}
+local ROW_HEIGHT = 14
+local OUTGOING_HEIGHT = 24
+local justify = {"LEFT", "CENTER", "RIGHT"}
+local schoolColors = {
+    [1] = {1, 0.39, 0.39}, [2] = {1, 0.90, 0.50}, [4] = {1, 0.50, 0.20},
+    [8] = {0.40, 0.85, 0.40}, [16] = {0.45, 0.80, 1},
+    [32] = {0.72, 0.55, 1}, [64] = {0.89, 0.60, 1},
+}
 
 local events = {
     "COMBAT_LOG_MESSAGE", "COMBAT_TEXT_UPDATE", "UNIT_COMBAT", "UNIT_SPELLCAST_INTERRUPTED",
@@ -74,18 +80,33 @@ local function WatchCombatLog()
     end)
 end
 
+local function RowAt(pane, offset)
+    return pane.rows[(pane.latest - offset - 1) % HISTORY_LIMIT + 1]
+end
+
+local function MaximumOffset(pane, height)
+    local used = 0
+    for offset = pane.count - 1, 0, -1 do
+        used = used + RowAt(pane, offset).height
+        if used > height then return math.min(offset + 1, pane.count - 1) end
+    end
+    return 0
+end
+
 local function RenderHistory(pane)
     for _, row in ipairs(pane.rows) do row:Hide() end
     if pane.count == 0 then return end
-    local visible = math.max(1, math.floor(pane:GetHeight() / ROW_HEIGHT))
-    pane.offset = math.min(pane.offset, math.max(0, pane.count - visible))
-    for index = 0, math.min(visible, pane.count - pane.offset) - 1 do
-        local slot = (pane.latest - pane.offset - index - 1) % HISTORY_LIMIT + 1
-        local row = pane.rows[slot]
+    local height = pane:GetHeight()
+    pane.offset = math.min(pane.offset, MaximumOffset(pane, height))
+    local used = 0
+    for offset = pane.offset, pane.count - 1 do
+        local row = RowAt(pane, offset)
+        if used > 0 and used + row.height > height then break end
         row:ClearAllPoints()
-        row:SetPoint("BOTTOMLEFT", pane, "BOTTOMLEFT", pane.starts[row.column] + 3, index * ROW_HEIGHT)
+        row:SetPoint("BOTTOMLEFT", pane, "BOTTOMLEFT", pane.starts[row.column] + 3, used)
         row:SetWidth(math.max(1, pane.widths[row.column] - 6))
         row:Show()
+        used = used + row.height
     end
 end
 
@@ -103,7 +124,6 @@ function CCL:AddPersonalFeedRow(column, value, red, green, blue, tooltip, fallba
     local row = pane.rows[slot]
     if not row then
         row = CreateFrame("Frame", nil, pane)
-        row:SetHeight(ROW_HEIGHT)
         row.text = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
         row.text:SetAllPoints()
         row.text:SetJustifyV("MIDDLE")
@@ -128,6 +148,8 @@ function CCL:AddPersonalFeedRow(column, value, red, green, blue, tooltip, fallba
         row.text:SetText(fallback)
     end
     row.column, row.tooltip = column, tooltip
+    row.height = column == 3 and OUTGOING_HEIGHT or ROW_HEIGHT
+    row:SetHeight(row.height)
     row:EnableMouse(tooltip ~= nil)
     row.text:SetJustifyH(justify[column])
     row.text:SetTextColor(Read(red, "number") or 1, Read(green, "number") or 1, Read(blue, "number") or 1)
@@ -143,7 +165,7 @@ local function OwnUnit(value)
     if unit == "player" or unit == "pet" then return unit end
 end
 
-local function AddIncomingAmount(label, amountValue, action)
+local function AddIncomingAmount(label, amountValue, action, schoolMask)
     local amount = Read(amountValue, "number")
     local color = action == "HEAL" and CCL.COLORS.lightgreen
         or action == "WOUND" and CCL.COLORS.red or CCL.COLORS.beige
@@ -151,14 +173,16 @@ local function AddIncomingAmount(label, amountValue, action)
     local protected = (action == "WOUND" or action == "HEAL") and not CanAccess(amountValue)
     local showAmount = protected or (amount and amount > 0)
     local red, green, blue = 1, 1, 1
-    if action == "HEAL" then
+    local healing = action == "HEAL"
+    if healing then
         red, green, blue = 0.49, 0.80, 0.43
     elseif action == "WOUND" then
-        red, green, blue = 1, 0.39, 0.39
+        red, green, blue = unpack(schoolColors[Read(schoolMask, "number")] or schoolColors[1])
     end
     local value = fallback
     if showAmount then value = amountValue end
-    local ok = CCL:AddPersonalFeedRow(1, value, red, green, blue, showAmount and label or nil, fallback)
+    local ok = CCL:AddPersonalFeedRow(healing and 2 or 1, value, red, green, blue,
+        showAmount and label or nil, fallback)
     if protected then
         local pane = CCL.personalFeedPane
         local counter = ok and "amountsAccepted" or "amountErrors"
@@ -166,14 +190,14 @@ local function AddIncomingAmount(label, amountValue, action)
     end
 end
 
-local function AddIncoming(unitValue, actionValue, flagValue, amountValue)
+local function AddIncoming(unitValue, actionValue, flagValue, amountValue, schoolMask)
     local unit = OwnUnit(unitValue)
     local action = Read(actionValue, "string")
     local label = results[action]
     if not unit or not label then return end
     if Read(flagValue, "string") == "CRITICAL" then label = label .. " •" end
     if unit == "pet" then label = "Pet " .. label end
-    AddIncomingAmount(label, amountValue, action)
+    AddIncomingAmount(label, amountValue, action, schoolMask)
 end
 
 local function AddCombatTextEvent(eventType)
@@ -255,7 +279,11 @@ function CCL:InitializePersonalFeed()
     pane.messagesAccepted = 0
     pane:EnableMouseWheel(true)
     pane:SetScript("OnMouseWheel", function(frame, delta)
-        frame.offset = math.max(0, frame.offset + (delta > 0 and 1 or -1))
+        if IsShiftKeyDown() then
+            frame.offset = delta > 0 and frame.count or 0
+        else
+            frame.offset = math.max(0, frame.offset + (delta > 0 and 1 or -1))
+        end
         RenderHistory(frame)
     end)
     pane:SetScript("OnSizeChanged", RenderHistory)

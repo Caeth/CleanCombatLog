@@ -134,8 +134,8 @@ function CCL:CreateDisplay()
         local width = frame:GetWidth()
         local usable = width - (gap * 2)
         local personal = CCL.personalFeedVisible
-        local sideWidth = floor(usable * (personal and 0.24 or 0.31))
-        local infoWidth = personal and floor(usable * 0.26) or usable - (sideWidth * 2)
+        local sideWidth = floor(usable * (personal and 0.18 or 0.31))
+        local infoWidth = personal and floor(usable * 0.42) or usable - (sideWidth * 2)
         local contentTop = personal and top + 15 or top
 
         incoming:ClearAllPoints()
@@ -183,7 +183,13 @@ function CCL:SetPersonalFeedVisible(visible)
     self.Layout()
     for index, header in ipairs(self.personalFeedHeaders) do
         header:ClearAllPoints()
-        header:SetPoint("BOTTOM", self.columns[index], "TOP", 0, 3)
+        if index == 1 then
+            header:SetPoint("BOTTOMLEFT", self.columns[index], "TOPLEFT", 3, 3)
+        elseif index == 3 then
+            header:SetPoint("BOTTOMRIGHT", self.columns[index], "TOPRIGHT", -3, 3)
+        else
+            header:SetPoint("BOTTOM", self.columns[index], "TOP", 0, 3)
+        end
         header:SetShown(visible)
     end
 end
