@@ -4,7 +4,7 @@ CCL = CCL or {}
 _G.CleanCombatLog = CCL
 
 CCL.name = addonName or "CleanCombatLog"
-CCL.version = "0.2.0-probe"
+CCL.version = "0.3.0"
 
 local function Print(...)
     print("|cff7dcde6CleanCombatLog:|r", ...)
@@ -122,9 +122,17 @@ local function OnAddonLoaded(_, event, loadedAddon)
 
     CleanCombatLogDB = CleanCombatLogDB or {}
     ApplyDefaults(CleanCombatLogDB, defaults)
+    if not CleanCombatLogDB.timelinePositionInitialized then
+        CleanCombatLogDB.point, CleanCombatLogDB.relativePoint = defaults.point, defaults.relativePoint
+        CleanCombatLogDB.x, CleanCombatLogDB.y = defaults.x, defaults.y
+        CleanCombatLogDB.timelinePositionInitialized = true
+    end
 
     if CCL.CreateDisplay then
         CCL:CreateDisplay()
+    end
+    if CCL.InitializePersonalFeed then
+        CCL:InitializePersonalFeed()
     end
 
     CCL:SetLocked(CleanCombatLogDB.locked)
@@ -148,9 +156,12 @@ SlashCmdList.CLEANCOMBATLOG = function(message)
         Print("/ccl cleu        - attempt/toggle COMBAT_LOG_EVENT_UNFILTERED")
         Print("/ccl unitcombat  - toggle the experimental UNIT_COMBAT adapter")
         Print("/ccl probe ...   - Forever combat API instrumentation")
+        Print("/ccl feed [on|off] - show status or toggle the personal feed")
+        Print("/ccl verify       - start or finish a personal-feed test")
         Print("/ccl clear       - clear all three columns")
         Print("/ccl lock        - lock the display")
         Print("/ccl move        - unlock/move the display")
+        Print("/ccl center      - return the window to its default position")
         return
     end
 
@@ -168,6 +179,14 @@ SlashCmdList.CLEANCOMBATLOG = function(message)
         end
     elseif command == "unitcombat" then
         CCL:TogglePlayerCombatAdapter()
+    elseif command == "center" then
+        CCL.frame:ClearAllPoints()
+        CCL.frame:SetPoint("CENTER", UIParent, "CENTER", defaults.x, defaults.y)
+        CCL:SavePosition()
+    elseif command == "feed" then
+        CCL:HandlePersonalFeedCommand(rest)
+    elseif command == "verify" then
+        CCL:TogglePersonalFeedVerification()
     elseif command == "probe" then
         if CCL.HandleProbeCommand then
             CCL:HandleProbeCommand(rest)

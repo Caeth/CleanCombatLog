@@ -121,26 +121,39 @@ function CCL:CreateDisplay()
     local outgoing = CreateColumn(frame, "LEFT")
 
     self.columns = {incoming, info, outgoing}
+    self.personalFeedHeaders = {}
+    for index, title in ipairs({"Incoming", "Effects", "Outgoing"}) do
+        local header = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        header:SetPoint("TOPLEFT", self.columns[index], "TOPLEFT", 2, 0)
+        header:SetText(title)
+        header:Hide()
+        self.personalFeedHeaders[index] = header
+    end
 
     local function Layout()
         local width = frame:GetWidth()
         local usable = width - (gap * 2)
-        local sideWidth = floor(usable * 0.31)
-        local infoWidth = usable - (sideWidth * 2)
+        local personal = CCL.personalFeedVisible
+        local sideWidth = floor(usable * (personal and 0.18 or 0.31))
+        local infoWidth = personal and floor(usable * 0.42) or usable - (sideWidth * 2)
+        local contentTop = personal and top + 15 or top
 
         incoming:ClearAllPoints()
-        incoming:SetPoint("TOPLEFT", frame, "TOPLEFT", 0, -top)
+        incoming:SetPoint("TOPLEFT", frame, "TOPLEFT", 0, -contentTop)
         incoming:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", 0, 0)
         incoming:SetWidth(sideWidth)
 
         info:ClearAllPoints()
         info:SetPoint("TOPLEFT", incoming, "TOPRIGHT", gap, 0)
-        info:SetPoint("BOTTOM", frame, "BOTTOM", 0, 0)
+        info:SetPoint("BOTTOMLEFT", incoming, "BOTTOMRIGHT", gap, 0)
         info:SetWidth(infoWidth)
 
         outgoing:ClearAllPoints()
         outgoing:SetPoint("TOPLEFT", info, "TOPRIGHT", gap, 0)
         outgoing:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", 0, 0)
+        if personal and CCL.personalFeedPane then
+            CCL:SetPersonalFeedColumnWidths(sideWidth, infoWidth, usable - sideWidth - infoWidth, gap)
+        end
     end
 
     self.Layout = Layout
@@ -163,6 +176,24 @@ function CCL:CreateDisplay()
     end
 end
 
+function CCL:SetPersonalFeedVisible(visible)
+    self.personalFeedVisible = visible
+    for _, column in ipairs(self.columns) do column:SetShown(not visible) end
+    self.personalFeedPane:SetShown(visible)
+    self.Layout()
+    for index, header in ipairs(self.personalFeedHeaders) do
+        header:ClearAllPoints()
+        if index == 1 then
+            header:SetPoint("BOTTOMLEFT", self.columns[index], "TOPLEFT", 3, 3)
+        elseif index == 3 then
+            header:SetPoint("BOTTOMRIGHT", self.columns[index], "TOPRIGHT", -3, 3)
+        else
+            header:SetPoint("BOTTOM", self.columns[index], "TOP", 0, 3)
+        end
+        header:SetShown(visible)
+    end
+end
+
 function CCL:SetChromeVisible(visible)
     if self.background then
         self.background:SetShown(visible)
@@ -181,6 +212,7 @@ function CCL:Clear()
     for _, column in ipairs(self.columns) do
         column:Clear()
     end
+    if self.ClearPersonalFeed then self:ClearPersonalFeed() end
 end
 
 -- columnIndex: 1 incoming, 2 information, 3 outgoing.
@@ -189,6 +221,10 @@ function CCL:AddRow(columnIndex, text, tooltip)
         return
     end
 
+    if self.personalFeedVisible then
+        self:AddPersonalFeedRow(columnIndex, text, nil, nil, nil, tooltip)
+        return
+    end
     local linked = LinkText(tostring(text), tooltip)
 
     for index, column in ipairs(self.columns) do
@@ -199,6 +235,7 @@ end
 
 function CCL:RunDisplayTest()
     self:Clear()
+    if self.personalFeedVisible then self:SetPersonalFeedVisible(false) end
 
     local c = COLORS
 

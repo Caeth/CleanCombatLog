@@ -1,6 +1,22 @@
-# CleanCombatLog 0.2.0-probe
+# CleanCombatLog
 
 This build provides **World of Warcraft: Forever combat API instrumentation** and an opt-in experimental combat display.
+
+## Personal combat feed
+
+The personal feed starts enabled on Forever. Open Blizzard's **Combat Log** and choose **My Actions**. To try collecting with the tab hidden, run `/ccl feed background on` out of combat, then switch to **General**. The addon asks the client to keep filtered events enabled while the tab is hidden. `/ccl feed` reports readiness, filtered-event state, retained lines, and render errors. Use `/ccl feed background off` to undo the background setting. `/ccl feed off` disables the feed and restores the original display. `/ccl feed on` turns it back on.
+
+The right **Outgoing** column shows Blizzard's My Actions lines as supplied by the client. Keep **Done By → Me** selected and **Done To → Me** clear to focus on outgoing actions. Turn off **Auras** and **Spell Casting** in My Actions if you want effects and cast activity out of the right column. Blizzard can include healing from your own abilities, including self-heals. Mouse-wheel over the column to review up to 160 lines from the current session. Each row has room for about two lines at the default font size. The feed starts collecting on combat entry when My Actions is ready, which avoids most history replay from opening the tab out of combat. Keep your chosen tab and filter steady during the fight. Messages outside combat and messages from a probe formatter experiment are excluded.
+
+The left **Incoming** column shows damage and avoidance for your player or pet, aligned to the left. Damage appears as a bare amount coloured by school when readable, with red as the fallback. The wider **Effects** column is centred and shows healing as green numbers alongside combat transitions, interruptions, and player buff and debuff notices. The **Outgoing** column is aligned to the right and reserves room for Blizzard's full lines. Protected text and amounts go directly to a FontString. A result label remains visible if the client rejects an amount. Hover an amount for its available result details or an aura notice for its name when readable. `/ccl clear` clears the timeline, `/ccl move` unlocks the frame for dragging, and `/ccl center` returns it to its default position.
+
+All three columns share one 160-row timeline in event arrival order. Scroll over the timeline to move them together. Hold Shift while scrolling to jump to the oldest or newest rows. Incoming spell hits and ticks appear when `UNIT_COMBAT` reports them on the player or pet. The feed uses Combat Text for effects because its damage messages lack a recipient field. For outgoing spell hits and ticks, enable **Spells → Damage** and **Periodic → Damage** in the My Actions message types.
+
+Hover an incoming row for its time, result, recipient, and readable amount and damage school. Outgoing rows open a wider hover view of the original Blizzard message. A death row shows up to five readable Death Recap entries, with recent observed incoming results as a fallback. Hover **Combat summary** for the elapsed combat time and any available local-player Damage Meter totals. Meter totals are labelled as current-session figures because that session may span a different interval.
+
+### Quick live test
+
+Open Blizzard's Combat Log on **My Actions**, leave combat, and run `/ccl verify`. This starts and marks a probe capture and records the current feed diagnostics. Take a melee hit, a direct spell hit and some periodic damage, receive a heal, and use a damaging ability of your own. After combat, run `/ccl verify` again to save the capture and final feed counters, then `/reload` to write the file to disk. The command leaves an already-running manual probe alone.
 
 The goal is to recover as much of the old `COMBAT_LOG_EVENT_UNFILTERED` capability as Forever actually permits, and only accept missing functionality after direct shipping-client testing shows that it cannot be reconstructed reliably.
 
