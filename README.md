@@ -12,6 +12,10 @@ The left **Incoming** column keeps the last 14 incoming player and pet results. 
 
 The incoming feed also listens for spell damage from Blizzard's Combat Text when it is tracking your player. Enable Blizzard's floating combat text if the spell counter stays at zero during a spell-heavy fight. Spell ticks can appear as **Spell hit** if the client emits the same event for both. A hit may appear twice if both client sources report it. For outgoing spell hits and ticks, enable **Spells → Damage** and **Periodic → Damage** in the My Actions message types.
 
+### Quick live test
+
+Open Blizzard's Combat Log on **My Actions**, leave combat, and run `/ccl verify`. This starts and marks a probe capture and records the current feed diagnostics. Take a melee hit, a direct spell hit and some periodic damage, receive a heal, and use a damaging ability of your own. After combat, run `/ccl verify` again to save the capture and final feed counters, then `/reload` to write the file to disk. The command leaves an already-running manual probe alone.
+
 The goal is to recover as much of the old `COMBAT_LOG_EVENT_UNFILTERED` capability as Forever actually permits, and only accept missing functionality after direct shipping-client testing shows that it cannot be reconstructed reliably.
 
 ## What the probe tests

@@ -4,6 +4,7 @@ local frame = CreateFrame("Frame")
 CCL.Probe = frame
 
 local active, startedAt, combatTextUnit = false, 0, nil
+local verifyingPersonalFeed = false
 local records, counts, registration = {}, {}, {}
 local formatterRestoreSettings, formatterRestoreFilteredEvents, formatterProfile
 local formatterPreview, formatterPreviewRows, formatterPreviewIndex
@@ -797,6 +798,10 @@ end
 
 function CCL:StopCombatProbe()
     if not active then self.Print("probe is not running."); return end
+    if verifyingPersonalFeed then
+        Add("probe", "FEED_VERIFY_END", {}, self:GetPersonalFeedDiagnostics())
+        verifyingPersonalFeed = false
+    end
     Add("probe", "STOP")
     active = false
     UnregisterAll()
@@ -805,6 +810,33 @@ function CCL:StopCombatProbe()
     if formatterPreview then formatterPreview:Hide() end
     Persist()
     self.Print("probe stopped;", #records, "sanitised records saved in CleanCombatLogDB.probe.")
+end
+
+function CCL:TogglePersonalFeedVerification()
+    if verifyingPersonalFeed then
+        self:StopCombatProbe()
+        self:HandlePersonalFeedCommand("status")
+        self.Print("Run /reload to write the completed test to disk.")
+    elseif active then
+        self.Print("A probe is already running. Use /ccl probe stop before starting a feed test.")
+    else
+        local diagnostics = self:GetPersonalFeedDiagnostics()
+        if not diagnostics.enabled then
+            self.Print("Enable the personal feed with /ccl feed on before testing.")
+            return
+        end
+        if InCombatLockdown() then
+            self.Print("Leave combat before starting a personal-feed test.")
+            return
+        end
+        self:StartCombatProbe()
+        verifyingPersonalFeed = true
+        self:HandleProbeCommand("mark personal-feed-verification")
+        Add("probe", "FEED_VERIFY_START", {}, diagnostics)
+        self:HandlePersonalFeedCommand("status")
+        self.Print("Combat Text active unit:", diagnostics.combatTextUnit)
+        self.Print("Run /ccl verify again after the fight to save the test.")
+    end
 end
 
 function CCL:PrintCombatProbeStatus()

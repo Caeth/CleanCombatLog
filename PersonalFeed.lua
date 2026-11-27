@@ -83,6 +83,7 @@ local function AddMessage(pane, message, red, green, blue)
         row:SetTextColor(1, 1, 1)
     end
     pane.latest = slot
+    pane.messagesAccepted = pane.messagesAccepted + 1
     pane.count = math.min(HISTORY_LIMIT, pane.count + 1)
     if pane.offset > 0 then pane.offset = pane.offset + 1 end
     RenderHistory(pane)
@@ -205,6 +206,7 @@ function CCL:InitializePersonalFeed()
     pane:SetAllPoints(self.columns[3])
     pane.rows, pane.latest, pane.count, pane.offset, pane.errors = {}, 0, 0, 0, 0
     pane.amountsAccepted, pane.amountErrors, pane.spellRows = 0, 0, 0
+    pane.messagesAccepted = 0
     pane:EnableMouseWheel(true)
     pane:SetScript("OnMouseWheel", function(frame, delta)
         frame.offset = math.max(0, frame.offset + (delta > 0 and 1 or -1))
@@ -228,6 +230,26 @@ function CCL:ClearPersonalFeed()
     end
     pane.latest, pane.count, pane.offset, pane.errors = 0, 0, 0, 0
     pane.amountsAccepted, pane.amountErrors, pane.spellRows = 0, 0, 0
+    pane.messagesAccepted = 0
+end
+
+function CCL:GetPersonalFeedDiagnostics()
+    local pane = self.personalFeedPane
+    local activeUnit
+    if C_CombatText and C_CombatText.GetActiveUnit then
+        local ok, unit = pcall(C_CombatText.GetActiveUnit)
+        if ok then activeUnit = Read(unit, "string") end
+    end
+    return {
+        enabled = CleanCombatLogDB.personalFeedEnabled,
+        myActionsReady = MyActionsReady(),
+        combatTextUnit = activeUnit or "unavailable",
+        messagesAccepted = pane.messagesAccepted,
+        messageErrors = pane.errors,
+        spellRows = pane.spellRows,
+        amountsAccepted = pane.amountsAccepted,
+        amountErrors = pane.amountErrors,
+    }
 end
 
 function CCL:HandlePersonalFeedCommand(rest)

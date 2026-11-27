@@ -152,6 +152,7 @@ SlashCmdList.CLEANCOMBATLOG = function(message)
         Print("/ccl unitcombat  - toggle the experimental UNIT_COMBAT adapter")
         Print("/ccl probe ...   - Forever combat API instrumentation")
         Print("/ccl feed [on|off] - show status or toggle the personal feed")
+        Print("/ccl verify       - start or finish a personal-feed test")
         Print("/ccl clear       - clear all three columns")
         Print("/ccl lock        - lock the display")
         Print("/ccl move        - unlock/move the display")
@@ -174,6 +175,8 @@ SlashCmdList.CLEANCOMBATLOG = function(message)
         CCL:TogglePlayerCombatAdapter()
     elseif command == "feed" then
         CCL:HandlePersonalFeedCommand(rest)
+    elseif command == "verify" then
+        CCL:TogglePersonalFeedVerification()
     elseif command == "probe" then
         if CCL.HandleProbeCommand then
             CCL:HandleProbeCommand(rest)
