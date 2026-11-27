@@ -1,7 +1,8 @@
 local _, CCL = ...
 local CanAccess = CCL.CanAccess
 local HISTORY_LIMIT = 160
-local ROW_HEIGHT = 27
+local ROW_HEIGHT = 24
+local justify = {"CENTER", "CENTER", "LEFT"}
 
 local events = {
     "COMBAT_LOG_MESSAGE", "COMBAT_TEXT_UPDATE", "UNIT_COMBAT", "UNIT_SPELLCAST_INTERRUPTED",
@@ -12,12 +13,6 @@ local results = {
     WOUND = "Hit", HEAL = "Heal", MISS = "Miss", DODGE = "Dodge",
     PARRY = "Parry", BLOCK = "Block", RESIST = "Resist", ABSORB = "Absorb",
     IMMUNE = "Immune", DEFLECT = "Deflect", EVADE = "Evade",
-}
-
-local spellDamage = {
-    SPELL_DAMAGE = "Spell hit",
-    SPELL_DAMAGE_CRIT = "Spell hit •",
-    SPELL_PERIODIC_DAMAGE = "Tick",
 }
 
 local auraEffects = {
@@ -88,43 +83,59 @@ local function RenderHistory(pane)
         local slot = (pane.latest - pane.offset - index - 1) % HISTORY_LIMIT + 1
         local row = pane.rows[slot]
         row:ClearAllPoints()
-        row:SetPoint("BOTTOMLEFT", pane, "BOTTOMLEFT", 2, index * ROW_HEIGHT)
-        row:SetPoint("RIGHT", pane, "RIGHT", -2, 0)
+        row:SetPoint("BOTTOMLEFT", pane, "BOTTOMLEFT", pane.starts[row.column] + 3, index * ROW_HEIGHT)
+        row:SetWidth(math.max(1, pane.widths[row.column] - 6))
         row:Show()
     end
 end
 
-local function AddMessage(pane, message, red, green, blue)
+function CCL:SetPersonalFeedColumnWidths(incoming, effects, outgoing, gap)
+    local pane = self.personalFeedPane
+    pane.starts = {0, incoming + gap, incoming + effects + 2 * gap}
+    pane.widths = {incoming, effects, outgoing}
+    RenderHistory(pane)
+end
+
+function CCL:AddPersonalFeedRow(column, value, red, green, blue, tooltip, fallback)
+    local pane = self.personalFeedPane
+    if not self.personalFeedVisible or not justify[column] then return end
     local slot = pane.latest % HISTORY_LIMIT + 1
     local row = pane.rows[slot]
     if not row then
-        row = pane:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        row = CreateFrame("Frame", nil, pane)
         row:SetHeight(ROW_HEIGHT)
-        row:SetJustifyH("LEFT")
-        row:SetJustifyV("BOTTOM")
-        row:SetWordWrap(true)
+        row.text = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        row.text:SetAllPoints()
+        row.text:SetJustifyV("MIDDLE")
+        row.text:SetWordWrap(true)
+        row:SetScript("OnEnter", function(frame)
+            if not frame.tooltip then return end
+            GameTooltip:SetOwner(frame, "ANCHOR_CURSOR")
+            GameTooltip:SetText(frame.tooltip, 1, 1, 1, true)
+            GameTooltip:Show()
+        end)
+        row:SetScript("OnLeave", function() GameTooltip:Hide() end)
         pane.rows[slot] = row
     end
 
-    -- The client supplies the formatted value directly to the UI.
-    if not pcall(row.SetText, row, message) then
-        pane.errors = pane.errors + 1
-        -- A failed setter may leave this slot unchanged. Keep the history indices intact.
-        if pane.count < HISTORY_LIMIT then row:Hide() end
-        return false
+    -- Protected values go directly to the native text setter.
+    local ok = pcall(row.text.SetText, row.text, value)
+    if not ok then
+        if not fallback then
+            if pane.count < HISTORY_LIMIT then row:Hide() end
+            return false
+        end
+        row.text:SetText(fallback)
     end
-    red, green, blue = Read(red, "number"), Read(green, "number"), Read(blue, "number")
-    if red and green and blue then
-        row:SetTextColor(red, green, blue)
-    else
-        row:SetTextColor(1, 1, 1)
-    end
+    row.column, row.tooltip = column, tooltip
+    row:EnableMouse(tooltip ~= nil)
+    row.text:SetJustifyH(justify[column])
+    row.text:SetTextColor(Read(red, "number") or 1, Read(green, "number") or 1, Read(blue, "number") or 1)
     pane.latest = slot
-    pane.messagesAccepted = pane.messagesAccepted + 1
     pane.count = math.min(HISTORY_LIMIT, pane.count + 1)
     if pane.offset > 0 then pane.offset = pane.offset + 1 end
     RenderHistory(pane)
-    return true
+    return ok
 end
 
 local function OwnUnit(value)
@@ -136,23 +147,18 @@ local function AddIncomingAmount(label, amountValue, action)
     local amount = Read(amountValue, "number")
     local color = action == "HEAL" and CCL.COLORS.lightgreen
         or action == "WOUND" and CCL.COLORS.red or CCL.COLORS.beige
-    local prefix = color .. label .. CCL.COLORS.reset
+    local fallback = color .. label .. CCL.COLORS.reset
     local protected = (action == "WOUND" or action == "HEAL") and not CanAccess(amountValue)
     local showAmount = protected or (amount and amount > 0)
-    local heal = action == "HEAL" and showAmount
     local red, green, blue = 1, 1, 1
-    local valuePrefix = prefix
-    if heal then
+    if action == "HEAL" then
         red, green, blue = 0.49, 0.80, 0.43
-        valuePrefix = ""
+    elseif action == "WOUND" then
+        red, green, blue = 1, 0.39, 0.39
     end
-    local value = ""
-    if protected then
-        value = amountValue
-    elseif showAmount then
-        value = amount
-    end
-    local ok = CCL:AddSecretValueRow(1, value, red, green, blue, valuePrefix, nil, prefix)
+    local value = fallback
+    if showAmount then value = amountValue end
+    local ok = CCL:AddPersonalFeedRow(1, value, red, green, blue, showAmount and label or nil, fallback)
     if protected then
         local pane = CCL.personalFeedPane
         local counter = ok and "amountsAccepted" or "amountErrors"
@@ -172,22 +178,16 @@ end
 
 local function AddCombatTextEvent(eventType)
     eventType = Read(eventType, "string")
-    local damage, effect = spellDamage[eventType], auraEffects[eventType]
-    if not (damage or effect) or not C_CombatText or not C_CombatText.GetCurrentEventInfo
+    local effect = auraEffects[eventType]
+    if not effect or not C_CombatText or not C_CombatText.GetCurrentEventInfo
         or not C_CombatText.GetActiveUnit then return end
     local unitOK, unit = pcall(C_CombatText.GetActiveUnit)
     if not unitOK or Read(unit, "string") ~= "player" then return end
     local ok, value = pcall(C_CombatText.GetCurrentEventInfo)
     if not ok then return end
-    if damage then
-        local pane = CCL.personalFeedPane
-        pane.spellRows = pane.spellRows + 1
-        AddIncomingAmount(damage, value, "WOUND")
-    else
-        local name = Read(value, "string")
-        local color = eventType == "SPELL_AURA_START_HARMFUL" or eventType == "SPELL_AURA_END_HARMFUL"
-        CCL:AddRow(2, (color and CCL.COLORS.red or CCL.COLORS.lightgreen) .. effect .. CCL.COLORS.reset, name)
-    end
+    local name = Read(value, "string")
+    local harmful = eventType == "SPELL_AURA_START_HARMFUL" or eventType == "SPELL_AURA_END_HARMFUL"
+    CCL:AddRow(2, (harmful and CCL.COLORS.red or CCL.COLORS.lightgreen) .. effect .. CCL.COLORS.reset, name)
 end
 
 local function OnEvent(listener, event, ...)
@@ -205,9 +205,11 @@ local function OnEvent(listener, event, ...)
             listener.live = false
             return
         end
-        if AddMessage(CCL.personalFeedPane, ...) and not CCL.personalFeedVisible then
-            CCL:SetPersonalFeedVisible(true)
-        end
+        if not CCL.personalFeedVisible then CCL:SetPersonalFeedVisible(true) end
+        local message, red, green, blue = ...
+        local pane = CCL.personalFeedPane
+        local counter = CCL:AddPersonalFeedRow(3, message, red, green, blue) and "messagesAccepted" or "errors"
+        pane[counter] = pane[counter] + 1
     else
         if CCL:IsPlayerCombatAdapterEnabled()
             or CCL.CombatLog:IsEventRegistered("COMBAT_LOG_EVENT_UNFILTERED") then return end
@@ -246,9 +248,10 @@ end
 
 function CCL:InitializePersonalFeed()
     local pane = CreateFrame("Frame", nil, self.frame)
-    pane:SetAllPoints(self.columns[3])
+    pane:SetPoint("TOPLEFT", self.columns[1], "TOPLEFT")
+    pane:SetPoint("BOTTOMRIGHT", self.columns[3], "BOTTOMRIGHT")
     pane.rows, pane.latest, pane.count, pane.offset, pane.errors = {}, 0, 0, 0, 0
-    pane.amountsAccepted, pane.amountErrors, pane.spellRows = 0, 0, 0
+    pane.amountsAccepted, pane.amountErrors = 0, 0
     pane.messagesAccepted = 0
     pane:EnableMouseWheel(true)
     pane:SetScript("OnMouseWheel", function(frame, delta)
@@ -268,11 +271,11 @@ function CCL:ClearPersonalFeed()
     local pane = self.personalFeedPane
     if not pane then return end
     for _, row in ipairs(pane.rows) do
-        row:SetText("")
+        row.text:SetText("")
         row:Hide()
     end
     pane.latest, pane.count, pane.offset, pane.errors = 0, 0, 0, 0
-    pane.amountsAccepted, pane.amountErrors, pane.spellRows = 0, 0, 0
+    pane.amountsAccepted, pane.amountErrors = 0, 0
     pane.messagesAccepted = 0
 end
 
@@ -293,7 +296,6 @@ function CCL:GetPersonalFeedDiagnostics()
         combatTextUnit = activeUnit or "unavailable",
         messagesAccepted = pane.messagesAccepted,
         messageErrors = pane.errors,
-        spellRows = pane.spellRows,
         amountsAccepted = pane.amountsAccepted,
         amountErrors = pane.amountErrors,
     }
@@ -323,12 +325,12 @@ function CCL:HandlePersonalFeedCommand(rest)
     self.Print("Personal feed", CleanCombatLogDB.personalFeedEnabled and "on" or "off",
         "· My Actions ready", ready and "yes" or "no",
         "· message event registered", pane.messageRegistered and "yes" or "no",
-        "· retained lines", pane.count, "· render errors", pane.errors)
+        "· timeline rows", pane.count, "· render errors", pane.errors)
     self.Print("Background collection", CleanCombatLogDB.personalFeedBackground and "on" or "off",
         "· filtered events", FilteredEventsEnabled() and "enabled" or "disabled",
         "· last activation", pane.backgroundResult or "not attempted")
     self.Print("Protected incoming amounts accepted", pane.amountsAccepted,
-        "· amount render errors", pane.amountErrors, "· Combat Text spell rows", pane.spellRows)
+        "· amount render errors", pane.amountErrors)
     if CleanCombatLogDB.personalFeedEnabled and not ready then
         self.Print("Select My Actions before combat. For a hidden log, try /ccl feed background on.")
     end

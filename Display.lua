@@ -134,8 +134,8 @@ function CCL:CreateDisplay()
         local width = frame:GetWidth()
         local usable = width - (gap * 2)
         local personal = CCL.personalFeedVisible
-        local sideWidth = floor(usable * (personal and 0.20 or 0.31))
-        local infoWidth = personal and floor(usable * 0.20) or usable - (sideWidth * 2)
+        local sideWidth = floor(usable * (personal and 0.24 or 0.31))
+        local infoWidth = personal and floor(usable * 0.26) or usable - (sideWidth * 2)
         local contentTop = personal and top + 15 or top
 
         incoming:ClearAllPoints()
@@ -145,12 +145,15 @@ function CCL:CreateDisplay()
 
         info:ClearAllPoints()
         info:SetPoint("TOPLEFT", incoming, "TOPRIGHT", gap, 0)
-        info:SetPoint("BOTTOM", frame, "BOTTOM", 0, 0)
+        info:SetPoint("BOTTOMLEFT", incoming, "BOTTOMRIGHT", gap, 0)
         info:SetWidth(infoWidth)
 
         outgoing:ClearAllPoints()
         outgoing:SetPoint("TOPLEFT", info, "TOPRIGHT", gap, 0)
         outgoing:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", 0, 0)
+        if personal and CCL.personalFeedPane then
+            CCL:SetPersonalFeedColumnWidths(sideWidth, infoWidth, usable - sideWidth - infoWidth, gap)
+        end
     end
 
     self.Layout = Layout
@@ -175,12 +178,12 @@ end
 
 function CCL:SetPersonalFeedVisible(visible)
     self.personalFeedVisible = visible
-    self.columns[3]:SetShown(not visible)
+    for _, column in ipairs(self.columns) do column:SetShown(not visible) end
     self.personalFeedPane:SetShown(visible)
     self.Layout()
     for index, header in ipairs(self.personalFeedHeaders) do
         header:ClearAllPoints()
-        header:SetPoint("BOTTOMLEFT", self.columns[index], "TOPLEFT", 2, 3)
+        header:SetPoint("BOTTOM", self.columns[index], "TOP", 0, 3)
         header:SetShown(visible)
     end
 end
@@ -212,6 +215,10 @@ function CCL:AddRow(columnIndex, text, tooltip)
         return
     end
 
+    if self.personalFeedVisible then
+        self:AddPersonalFeedRow(columnIndex, text, nil, nil, nil, tooltip)
+        return
+    end
     local linked = LinkText(tostring(text), tooltip)
 
     for index, column in ipairs(self.columns) do
