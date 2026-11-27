@@ -12,6 +12,8 @@ The left **Incoming** column shows damage and avoidance for your player or pet, 
 
 All three columns share one 160-row timeline in event arrival order. Scroll over the timeline to move them together. Hold Shift while scrolling to jump to the oldest or newest rows. Incoming spell hits and ticks appear when `UNIT_COMBAT` reports them on the player or pet. The feed uses Combat Text for effects because its damage messages lack a recipient field. For outgoing spell hits and ticks, enable **Spells → Damage** and **Periodic → Damage** in the My Actions message types.
 
+Hover an incoming row for its time, result, recipient, and readable amount and damage school. Outgoing rows open a wider hover view of the original Blizzard message. A death row shows up to five readable Death Recap entries, with recent observed incoming results as a fallback. Hover **Combat summary** for the elapsed combat time and any available local-player Damage Meter totals. Meter totals are labelled as current-session figures because that session may span a different interval.
+
 ### Quick live test
 
 Open Blizzard's Combat Log on **My Actions**, leave combat, and run `/ccl verify`. This starts and marks a probe capture and records the current feed diagnostics. Take a melee hit, a direct spell hit and some periodic damage, receive a heal, and use a damaging ability of your own. After combat, run `/ccl verify` again to save the capture and final feed counters, then `/reload` to write the file to disk. The command leaves an already-running manual probe alone.

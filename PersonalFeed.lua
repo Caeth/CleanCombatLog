@@ -9,10 +9,14 @@ local schoolColors = {
     [8] = {0.40, 0.85, 0.40}, [16] = {0.45, 0.80, 1},
     [32] = {0.72, 0.55, 1}, [64] = {0.89, 0.60, 1},
 }
+local schoolNames = {
+    [1] = "Physical", [2] = "Holy", [4] = "Fire", [8] = "Nature",
+    [16] = "Frost", [32] = "Shadow", [64] = "Arcane",
+}
 
 local events = {
     "COMBAT_LOG_MESSAGE", "COMBAT_TEXT_UPDATE", "UNIT_COMBAT", "UNIT_SPELLCAST_INTERRUPTED",
-    "PLAYER_REGEN_DISABLED", "PLAYER_REGEN_ENABLED", "PLAYER_ENTERING_WORLD",
+    "PLAYER_REGEN_DISABLED", "PLAYER_REGEN_ENABLED", "PLAYER_ENTERING_WORLD", "PLAYER_DEAD",
 }
 
 local results = {
@@ -30,6 +34,53 @@ local auraEffects = {
 
 local function Read(value, kind)
     if CanAccess(value) and type(value) == kind then return value end
+end
+
+local function Timestamp()
+    return date("%H:%M:%S")
+end
+
+local function ShowRowTooltip(row)
+    if row.fullTextReady then
+        row.fullText:Show()
+    elseif row.tooltip then
+        GameTooltip:SetOwner(row, "ANCHOR_CURSOR")
+        GameTooltip:SetText(row.tooltip, 1, 1, 1, true)
+        GameTooltip:Show()
+    end
+end
+
+local function HideRowTooltip(row)
+    if row.fullText then row.fullText:Hide() end
+    if GameTooltip:IsOwned(row) then GameTooltip:Hide() end
+end
+
+local function SetOutgoingTooltip(row, value, red, green, blue)
+    if not row.fullText then
+        local preview = CreateFrame("Frame", nil, UIParent)
+        preview:SetFrameStrata("TOOLTIP")
+        preview:SetClampedToScreen(true)
+        preview:SetSize(440, 80)
+        preview:SetPoint("BOTTOMRIGHT", row, "TOPRIGHT", 0, 4)
+        local background = preview:CreateTexture(nil, "BACKGROUND")
+        background:SetAllPoints()
+        background:SetColorTexture(0.04, 0.04, 0.05, 0.94)
+        local timestamp = preview:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        timestamp:SetPoint("TOPLEFT", 9, -7)
+        local content = preview:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        content:SetPoint("TOPLEFT", 9, -22)
+        content:SetPoint("BOTTOMRIGHT", -9, 7)
+        content:SetJustifyH("LEFT")
+        content:SetJustifyV("TOP")
+        content:SetWordWrap(true)
+        preview.text, preview.timestamp = content, timestamp
+        preview:Hide()
+        row.fullText = preview
+    end
+    local text = row.fullText.text
+    row.fullTextReady = pcall(text.SetText, text, value)
+    row.fullText.timestamp:SetText(Timestamp())
+    text:SetTextColor(red, green, blue)
 end
 
 local function MyActionsSelected()
@@ -94,8 +145,8 @@ local function MaximumOffset(pane, height)
 end
 
 local function RenderHistory(pane)
-    for _, row in ipairs(pane.rows) do row:Hide() end
     if pane.count == 0 then return end
+    local visible = {}
     local height = pane:GetHeight()
     pane.offset = math.min(pane.offset, MaximumOffset(pane, height))
     local used = 0
@@ -106,8 +157,13 @@ local function RenderHistory(pane)
         row:SetPoint("BOTTOMLEFT", pane, "BOTTOMLEFT", pane.starts[row.column] + 3, used)
         row:SetWidth(math.max(1, pane.widths[row.column] - 6))
         row:Show()
+        visible[row] = true
         used = used + row.height
     end
+    for row in pairs(pane.visibleRows) do
+        if not visible[row] then row:Hide() end
+    end
+    pane.visibleRows = visible
 end
 
 function CCL:SetPersonalFeedColumnWidths(incoming, effects, outgoing, gap)
@@ -128,13 +184,9 @@ function CCL:AddPersonalFeedRow(column, value, red, green, blue, tooltip, fallba
         row.text:SetAllPoints()
         row.text:SetJustifyV("MIDDLE")
         row.text:SetWordWrap(true)
-        row:SetScript("OnEnter", function(frame)
-            if not frame.tooltip then return end
-            GameTooltip:SetOwner(frame, "ANCHOR_CURSOR")
-            GameTooltip:SetText(frame.tooltip, 1, 1, 1, true)
-            GameTooltip:Show()
-        end)
-        row:SetScript("OnLeave", function() GameTooltip:Hide() end)
+        row:SetScript("OnEnter", ShowRowTooltip)
+        row:SetScript("OnLeave", HideRowTooltip)
+        row:SetScript("OnHide", HideRowTooltip)
         pane.rows[slot] = row
     end
 
@@ -147,12 +199,15 @@ function CCL:AddPersonalFeedRow(column, value, red, green, blue, tooltip, fallba
         end
         row.text:SetText(fallback)
     end
-    row.column, row.tooltip = column, tooltip
+    HideRowTooltip(row)
+    row.column, row.tooltip, row.fullTextReady = column, tooltip, false
     row.height = column == 3 and OUTGOING_HEIGHT or ROW_HEIGHT
     row:SetHeight(row.height)
-    row:EnableMouse(tooltip ~= nil)
     row.text:SetJustifyH(justify[column])
-    row.text:SetTextColor(Read(red, "number") or 1, Read(green, "number") or 1, Read(blue, "number") or 1)
+    red, green, blue = Read(red, "number") or 1, Read(green, "number") or 1, Read(blue, "number") or 1
+    row.text:SetTextColor(red, green, blue)
+    if column == 3 and ok and not tooltip then SetOutgoingTooltip(row, value, red, green, blue) end
+    row:EnableMouse(tooltip ~= nil or row.fullTextReady)
     pane.latest = slot
     pane.count = math.min(HISTORY_LIMIT, pane.count + 1)
     if pane.offset > 0 then pane.offset = pane.offset + 1 end
@@ -165,7 +220,7 @@ local function OwnUnit(value)
     if unit == "player" or unit == "pet" then return unit end
 end
 
-local function AddIncomingAmount(label, amountValue, action, schoolMask)
+local function AddIncomingAmount(label, amountValue, action, schoolMask, unit, flag)
     local amount = Read(amountValue, "number")
     local color = action == "HEAL" and CCL.COLORS.lightgreen
         or action == "WOUND" and CCL.COLORS.red or CCL.COLORS.beige
@@ -181,8 +236,17 @@ local function AddIncomingAmount(label, amountValue, action, schoolMask)
     end
     local value = fallback
     if showAmount then value = amountValue end
-    local ok = CCL:AddPersonalFeedRow(healing and 2 or 1, value, red, green, blue,
-        showAmount and label or nil, fallback)
+    local school = schoolNames[Read(schoolMask, "number")]
+    local tooltip = Timestamp() .. "  " .. label .. "\nRecipient: " .. (unit == "pet" and "Pet" or "You")
+    if amount then tooltip = tooltip .. "\nAmount: " .. amount end
+    if action == "WOUND" and school then tooltip = tooltip .. "\nSchool: " .. school end
+    if flag and flag ~= "" then tooltip = tooltip .. "\nResult: " .. flag end
+    local ok = CCL:AddPersonalFeedRow(healing and 2 or 1, value, red, green, blue, tooltip, fallback)
+    if unit == "player" and (action == "WOUND" or healing) then
+        local recent = CCL.personalFeedPane.recentIncoming
+        if #recent == 5 then table.remove(recent, 1) end
+        recent[#recent + 1] = Timestamp() .. "  " .. label .. (amount and ("  " .. amount) or "")
+    end
     if protected then
         local pane = CCL.personalFeedPane
         local counter = ok and "amountsAccepted" or "amountErrors"
@@ -195,9 +259,10 @@ local function AddIncoming(unitValue, actionValue, flagValue, amountValue, schoo
     local action = Read(actionValue, "string")
     local label = results[action]
     if not unit or not label then return end
-    if Read(flagValue, "string") == "CRITICAL" then label = label .. " •" end
+    local flag = Read(flagValue, "string")
+    if flag == "CRITICAL" then label = label .. " •" end
     if unit == "pet" then label = "Pet " .. label end
-    AddIncomingAmount(label, amountValue, action, schoolMask)
+    AddIncomingAmount(label, amountValue, action, schoolMask, unit, flag)
 end
 
 local function AddCombatTextEvent(eventType)
@@ -214,12 +279,85 @@ local function AddCombatTextEvent(eventType)
     CCL:AddRow(2, (harmful and CCL.COLORS.red or CCL.COLORS.lightgreen) .. effect .. CCL.COLORS.reset, name)
 end
 
+local function GetPersonalMeterTotal(metric)
+    local query = C_DamageMeter and C_DamageMeter.GetCombatSessionFromType
+    if not query then return end
+    local current = Enum and Enum.DamageMeterSessionType and Enum.DamageMeterSessionType.Current or 1
+    local ok, value = pcall(query, current, metric)
+    local session = ok and Read(value, "table")
+    local sources = session and Read(session.combatSources, "table")
+    if not sources then return end
+    for _, entry in ipairs(sources) do
+        local source = Read(entry, "table")
+        if source and Read(source.isLocalPlayer, "boolean") then
+            return Read(source.totalAmount, "number")
+        end
+    end
+end
+
+local function AddCombatSummary(listener, duration)
+    local ended = listener.combatSequence
+    local function Finish()
+        if listener.combatSequence ~= ended or InCombatLockdown() or not CCL.personalFeedVisible then return end
+        local lines = {string.format("Combat duration: %d:%02d", math.floor(duration / 60), math.floor(duration % 60))}
+        local damage, taken, healing = GetPersonalMeterTotal(0), GetPersonalMeterTotal(7), GetPersonalMeterTotal(2)
+        if damage or taken or healing then
+            lines[#lines + 1] = "Damage Meter · current session"
+            if damage then lines[#lines + 1] = "Damage done: " .. damage end
+            if taken then lines[#lines + 1] = "Damage taken: " .. taken end
+            if healing then lines[#lines + 1] = "Healing done: " .. healing end
+        end
+        CCL:AddRow(2, "Combat summary", table.concat(lines, "\n"))
+    end
+    if C_Timer and C_Timer.After then C_Timer.After(0.25, Finish) else Finish() end
+end
+
+local function AddDeathRecap()
+    local lines = {Timestamp() .. "  You died"}
+    local query = C_DeathRecap and C_DeathRecap.GetRecapEvents
+    if query then
+        local ok, value = pcall(query)
+        local entries = ok and Read(value, "table")
+        if entries then
+            for index = 1, math.min(5, #entries) do
+                local entry = Read(entries[index], "table")
+                if entry then
+                    local source = Read(entry.sourceName, "string")
+                    local ability = Read(entry.spellName, "string")
+                    local amount = Read(entry.amount, "number")
+                    if source or ability or amount then
+                        local parts = {}
+                        if source then parts[#parts + 1] = source end
+                        if ability then parts[#parts + 1] = ability end
+                        if amount then parts[#parts + 1] = amount end
+                        lines[#lines + 1] = table.concat(parts, " · ")
+                    end
+                end
+            end
+        end
+    end
+    if #lines == 1 then
+        local recent = CCL.personalFeedPane.recentIncoming
+        if #recent > 0 then lines[#lines + 1] = "Recent incoming results" end
+        for index = #recent, 1, -1 do lines[#lines + 1] = recent[index] end
+    end
+    CCL:AddRow(2, CCL.COLORS.beige .. "†† You died ††" .. CCL.COLORS.reset, table.concat(lines, "\n"))
+end
+
 local function OnEvent(listener, event, ...)
     if event == "PLAYER_REGEN_DISABLED" then
         listener.live = MyActionsReady()
+        listener.combatSequence = (listener.combatSequence or 0) + 1
+        listener.combatStarted = GetTime()
     elseif event == "PLAYER_REGEN_ENABLED" then
         listener.live = false
         RefreshBackgroundFeed()
+        if listener.combatStarted then
+            AddCombatSummary(listener, GetTime() - listener.combatStarted)
+            listener.combatStarted = nil
+        end
+    elseif event == "PLAYER_DEAD" then
+        AddDeathRecap()
     elseif event == "PLAYER_ENTERING_WORLD" then
         WatchCombatLog()
         RefreshBackgroundFeed()
@@ -256,6 +394,8 @@ local function SetEnabled(enabled)
     local pane = CCL.personalFeedPane
     listener:UnregisterAllEvents()
     listener.live = false
+    listener.combatStarted = nil
+    listener.combatSequence = (listener.combatSequence or 0) + 1
     CCL:ClearSecretRows()
     pane.messageRegistered = false
     if enabled then
@@ -275,6 +415,7 @@ function CCL:InitializePersonalFeed()
     pane:SetPoint("TOPLEFT", self.columns[1], "TOPLEFT")
     pane:SetPoint("BOTTOMRIGHT", self.columns[3], "BOTTOMRIGHT")
     pane.rows, pane.latest, pane.count, pane.offset, pane.errors = {}, 0, 0, 0, 0
+    pane.recentIncoming, pane.visibleRows = {}, {}
     pane.amountsAccepted, pane.amountErrors = 0, 0
     pane.messagesAccepted = 0
     pane:EnableMouseWheel(true)
@@ -300,11 +441,13 @@ function CCL:ClearPersonalFeed()
     if not pane then return end
     for _, row in ipairs(pane.rows) do
         row.text:SetText("")
+        if row.fullText then row.fullText.text:SetText("") end
         row:Hide()
     end
     pane.latest, pane.count, pane.offset, pane.errors = 0, 0, 0, 0
     pane.amountsAccepted, pane.amountErrors = 0, 0
     pane.messagesAccepted = 0
+    pane.recentIncoming, pane.visibleRows = {}, {}
 end
 
 function CCL:GetPersonalFeedDiagnostics()
