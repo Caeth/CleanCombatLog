@@ -5,7 +5,7 @@ local ROW_HEIGHT = 27
 
 local events = {
     "COMBAT_LOG_MESSAGE", "COMBAT_TEXT_UPDATE", "UNIT_COMBAT", "UNIT_SPELLCAST_INTERRUPTED",
-    "PLAYER_REGEN_DISABLED", "PLAYER_REGEN_ENABLED",
+    "PLAYER_REGEN_DISABLED", "PLAYER_REGEN_ENABLED", "PLAYER_ENTERING_WORLD",
 }
 
 local results = {
@@ -31,15 +31,52 @@ local function Read(value, kind)
     if CanAccess(value) and type(value) == kind then return value end
 end
 
-local function MyActionsReady()
+local function MyActionsSelected()
     if CCL.Probe:IsFormatterExperimentActive() then return false end
     local filters = Read(Blizzard_CombatLog_Filters, "table")
-    if not filters or Read(filters.currentFilter, "number") ~= 1 then return false end
-    if not ChatFrame2 or not ChatFrame2:IsVisible() then return false end
+    return filters ~= nil and Read(filters.currentFilter, "number") == 1
+end
+
+local function FilteredEventsEnabled()
     local query = C_CombatLog and C_CombatLog.AreFilteredEventsEnabled
     if not query then return false end
     local ok, enabled = pcall(query)
     return ok and Read(enabled, "boolean") == true
+end
+
+local function MyActionsReady()
+    return MyActionsSelected() and FilteredEventsEnabled()
+end
+
+local function RefreshBackgroundFeed()
+    local pane = CCL.personalFeedPane
+    if InCombatLockdown() then return end
+    local setter = C_CombatLog and C_CombatLog.SetFilteredEventsEnabled
+    if not setter or (ChatFrame2 and ChatFrame2:IsVisible()) then return end
+    if CleanCombatLogDB.personalFeedEnabled and CleanCombatLogDB.personalFeedBackground then
+        if not MyActionsSelected() or FilteredEventsEnabled() then return end
+        local ok = pcall(setter, true)
+        pane.backgroundOwned = ok and FilteredEventsEnabled()
+        pane.backgroundResult = pane.backgroundOwned and "enabled" or "unavailable"
+    elseif pane.backgroundOwned then
+        local ok = pcall(setter, false)
+        if ok and not FilteredEventsEnabled() then
+            pane.backgroundOwned, pane.backgroundResult = nil, nil
+        end
+    end
+end
+
+local hookedCombatLog
+local function WatchCombatLog()
+    if not ChatFrame2 or hookedCombatLog == ChatFrame2 then return end
+    hookedCombatLog = ChatFrame2
+    ChatFrame2:HookScript("OnHide", function()
+        if C_Timer and C_Timer.After then
+            C_Timer.After(0, RefreshBackgroundFeed)
+        else
+            RefreshBackgroundFeed()
+        end
+    end)
 end
 
 local function RenderHistory(pane)
@@ -158,6 +195,10 @@ local function OnEvent(listener, event, ...)
         listener.live = MyActionsReady()
     elseif event == "PLAYER_REGEN_ENABLED" then
         listener.live = false
+        RefreshBackgroundFeed()
+    elseif event == "PLAYER_ENTERING_WORLD" then
+        WatchCombatLog()
+        RefreshBackgroundFeed()
     elseif event == "COMBAT_LOG_MESSAGE" then
         if not listener.live then return end
         if not MyActionsReady() then
@@ -199,6 +240,8 @@ local function SetEnabled(enabled)
     end
     CleanCombatLogDB.personalFeedEnabled = enabled
     CCL:SetPersonalFeedVisible(enabled)
+    WatchCombatLog()
+    RefreshBackgroundFeed()
 end
 
 function CCL:InitializePersonalFeed()
@@ -243,6 +286,10 @@ function CCL:GetPersonalFeedDiagnostics()
     return {
         enabled = CleanCombatLogDB.personalFeedEnabled,
         myActionsReady = MyActionsReady(),
+        background = CleanCombatLogDB.personalFeedBackground or false,
+        combatLogVisible = ChatFrame2 and ChatFrame2:IsVisible() or false,
+        filteredEvents = FilteredEventsEnabled(),
+        backgroundResult = pane.backgroundResult or "not attempted",
         combatTextUnit = activeUnit or "unavailable",
         messagesAccepted = pane.messagesAccepted,
         messageErrors = pane.errors,
@@ -254,10 +301,21 @@ end
 
 function CCL:HandlePersonalFeedCommand(rest)
     local action = rest:lower()
-    if action == "on" or action == "off" then
+    if action == "background on" or action == "background off" then
+        if InCombatLockdown() then
+            self.Print("Leave combat before changing background collection.")
+            return
+        end
+        CleanCombatLogDB.personalFeedBackground = action == "background on"
+        RefreshBackgroundFeed()
+    elseif action == "on" or action == "off" then
+        if InCombatLockdown() then
+            self.Print("Leave combat before changing the personal feed.")
+            return
+        end
         SetEnabled(action == "on")
     elseif action ~= "" and action ~= "status" then
-        self.Print("Use /ccl feed [on|off|status].")
+        self.Print("Use /ccl feed [on|off|status|background on|background off].")
         return
     end
     local pane = self.personalFeedPane
@@ -266,9 +324,12 @@ function CCL:HandlePersonalFeedCommand(rest)
         "· My Actions ready", ready and "yes" or "no",
         "· message event registered", pane.messageRegistered and "yes" or "no",
         "· retained lines", pane.count, "· render errors", pane.errors)
+    self.Print("Background collection", CleanCombatLogDB.personalFeedBackground and "on" or "off",
+        "· filtered events", FilteredEventsEnabled() and "enabled" or "disabled",
+        "· last activation", pane.backgroundResult or "not attempted")
     self.Print("Protected incoming amounts accepted", pane.amountsAccepted,
         "· amount render errors", pane.amountErrors, "· Combat Text spell rows", pane.spellRows)
     if CleanCombatLogDB.personalFeedEnabled and not ready then
-        self.Print("Open Blizzard's Combat Log and select My Actions before combat.")
+        self.Print("Select My Actions before combat. For a hidden log, try /ccl feed background on.")
     end
 end
