@@ -85,8 +85,35 @@ end
 
 local function MyActionsSelected()
     if CCL.Probe:IsFormatterExperimentActive() then return false end
-    local filters = Read(Blizzard_CombatLog_Filters, "table")
-    return filters ~= nil and Read(filters.currentFilter, "number") == 1
+    local container = Read(Blizzard_CombatLog_Filters, "table")
+    return container ~= nil and Read(container.currentFilter, "number") == 1
+end
+
+local function DescribeMyActionsOptions()
+    if not MyActionsSelected() then return end
+    local profiles = Read(Blizzard_CombatLog_Filters.filters, "table")
+    local profile = profiles and Read(profiles[1], "table")
+    if not profile then return end
+    local settings = Read(profile.settings, "table")
+    local rules = Read(profile.filters, "table")
+    local destinations, auras
+    if rules then
+        for _, value in ipairs(rules) do
+            local rule = Read(value, "table")
+            local flags = rule and Read(rule.destFlags, "table")
+            if flags then
+                for _, enabled in pairs(flags) do
+                    if Read(enabled, "boolean") then destinations = true end
+                end
+            end
+            local eventList = rule and Read(rule.eventList, "table")
+            if eventList and (Read(eventList.SPELL_AURA_APPLIED, "boolean")
+                or Read(eventList.SPELL_AURA_REMOVED, "boolean")) then
+                auras = true
+            end
+        end
+    end
+    return destinations, settings and Read(settings.timestamp, "boolean"), auras
 end
 
 local function FilteredEventsEnabled()
@@ -502,6 +529,15 @@ function CCL:HandlePersonalFeedCommand(rest)
         "· last activation", pane.backgroundResult or "not attempted")
     self.Print("Protected incoming amounts accepted", pane.amountsAccepted,
         "· amount render errors", pane.amountErrors)
+    local destinations, timestamps, auras = DescribeMyActionsOptions()
+    if destinations then
+        self.Print("My Actions includes Done To entries. Clear Done To in Combat Log settings to keep incoming rows out of Outgoing.")
+    end
+    if timestamps or auras then
+        self.Print("For a compact Outgoing column, turn off "
+            .. (timestamps and "Show Timestamp" or "") .. (timestamps and auras and " and " or "")
+            .. (auras and "Auras" or "") .. " in My Actions.")
+    end
     if CleanCombatLogDB.personalFeedEnabled and not ready then
         self.Print("Select My Actions before combat. For a hidden log, try /ccl feed background on.")
     end
